@@ -20,4 +20,3 @@ jsf-service-bootstrap.jar	ps -aef --forest|grep infa | grep WebService	java Serv
 InfaTomcatBootstrap	ps -aef --forest | grep EmailService	Java Service		Email Service
  	ps --aef --forest |grep infa | grep pmserver	 	 	Integration Service
 InfaTomcatBootstrap	ps -aef --forest|grep infa | grep DataIntegration	Java Service		Data integration Service	 
-
