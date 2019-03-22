@@ -1,0 +1,2364 @@
+/*Below sql queries are intended to use to build an informatica workflow,mappings execution monitor*/
+
+scheduling details for the worklows.
+
+select 'Rep_Name' as repository
+     , wkfl.subject_area
+     , wkfl.workflow_name
+     , wkfl.scheduler_name
+     , DECODE( wkfl.run_options
+             , 20, 'Run on Initialize'
+             , 2 , NULL
+             , 3 , 'Run on Demand'
+             , 4 , NULL
+             , 5 , 'Run on Demand'
+             , 8 , NULL
+             , 9 , 'Run on Demand'
+             , wkfl.run_options ) as RUN_OPTIONS
+     , DECODE( wkfl.run_options
+             , 20, 'Custom'
+             , 2 , 'Run Once'
+             , 3 , 'Run Once'
+             , 4 , 'Run Every'
+             , 5 , 'Run Every'
+             , 8 , 'Custom'
+             , 9 , 'Custom'
+             , wkfl.run_options ) as SCHEDULE_OPTIONS
+     , DECODE( wkfl.end_options
+             , 0 , 'End ON'
+             , 1 , 'End AFTER'
+             , 2 , 'Forever'
+             , wkfl.end_options ) as END_OPTIONS
+     , wkfl.run_options
+     , wkfl.end_options
+     , wkfl.start_time
+     , wkfl.end_time
+     , wkfl.delta_value
+     , wkfl.run_count
+  from rep_workflows wkfl
+where wkfl.end_options = 2 -- FOREVER
+order by 1,2,3
+
+--To get the workflows, sessions and associated mappings in a repository. --- *******
+SELECT b.Folder_Name,
+  x.workflow_name,
+  c.Session_Name,
+  o.MAPPING_NAME,
+  d.Connection_name,
+  d.user_name,
+  d.connect_string
+FROM
+  (SELECT object_id,
+    object_name Connection_name,
+    user_name,
+    connect_string
+  FROM opb_cnx
+  ) d,
+  (SELECT task_id, task_name Session_Name FROM opb_task
+  ) c,
+  (SELECT subj_id, subj_name Folder_Name FROM opb_subject
+  ) b,
+  (SELECT subject_id, mapping_name FROM opb_mapping
+  ) o,
+  (SELECT b.session_id,
+    a.subject_id,
+    a.workflow_name,
+    c.connection_id connection_id
+  FROM
+    (SELECT DISTINCT session_id,
+      connection_id
+    FROM opb_sess_cnx_vals
+    WHERE connection_id != 0
+    ) c,
+    (SELECT workflow_id,
+      task_id session_id
+    FROM opb_task_inst
+    WHERE task_type = 68
+    ) b, -- Workflow id , session id
+    (SELECT subject_id,
+      task_id Workflow_id,
+      task_name Workflow_name
+    FROM opb_task
+    WHERE task_type = 71
+    AND task_name   = '_mp_SBW_ZB90SOL_REPORT_INFORMATION'
+    AND subject_id IN
+      (SELECT subj_id FROM opb_subject
+      )
+    ) a
+  WHERE a.workflow_id = b.workflow_id
+  AND c.session_id    = b.session_id
+  ) x
+WHERE x.subject_id = b.subj_id
+AND c.task_id      = x.session_id
+AND o.SUBJECT_ID   = x.subject_id
+AND d.object_id    = x.connection_id
+order by folder_name, workflow_name, session_name, o.MAPPING_NAME,connection_name
+
+ --to check the connection details by giving connection name
+ select C.OBJECT_NAME as conn_name,
+			   OT.OBJECT_TYPE_NAME,
+			   ST.CNX_SUBTYPE_NAME,
+			   UG2.NAME OWNER,
+			   C.USER_NAME,
+			   C.CONNECT_STRING,
+			   c.CODE_PAGE
+		from   OPB_USER_GROUP UG,    -- users and groups are actually in one pile (just like in Oracle)
+			   OPB_USER_GROUP UG2,
+			   OPB_CNX C,            -- main Connection table
+			   OPB_OBJECT_ACCESS OA, -- generic object access table (can be used for ANY object)
+			   OPB_OBJECT_TYPE OT,   -- main Object Type table.
+			   OPB_MMD_CNX ST        -- Connection Sub Type table
+		where  c.OBJECT_ID = OA.OBJECT_ID
+		and    C.OBJECT_NAME = $!
+		and    C.OBJECT_TYPE = OA.OBJECT_TYPE
+		and    UG.ID = OA.USER_ID
+		and    UG.TYPE = OA.USER_TYPE
+		and    C.OBJECT_TYPE = OT.OBJECT_TYPE_ID
+		and    C.OBJECT_TYPE = ST.CNX_OBJECT_TYPE
+		and    C.OBJECT_SUBTYPE = ST.CNX_OBJECT_SUBTYPE
+		and    C.OWNER_ID = UG2.ID
+
+
+--> To get the list of relational connections based on the user name and the database instance .
+select  distinct os.subj_name folder_name,oc.object_name,ot.TASK_NAME session_name
+--ot.task_id, oc.object_id,ov.SESSION_ID,ov.WORKFLOW_ID ,ot.task_id,ot.subject_id
+from opb_subject os,opb_task ot, opb_sess_cnx_vals ov ,opb_cnx oc
+where ov.connection_id=oc.object_id AND ot.subject_id=os.subj_id AND ot.task_id=ov.SESSION_ID
+AND oc.user_name in ('USER_NAME','user_name') AND connect_string in ('DB_NAME','db_name')
+
+
+-->To get the list of workflows configured as “Configure Concurrent Execution” enabled.   ---****
+select distinct s.subj_name, a.task_name 
+from opb_subject s, opb_task a ,opb_task_attr b 
+where  a.task_id=b.task_id 
+AND s.subj_id=a.subject_id 
+AND b.attr_ID in (18,17) 
+AND b.attr_value in (1) 
+AND a.task_type=71;
+
+
+--to get connection details
+select otype.object_type_name "connection_type", cnx.object_name "connection_name",
+cnx.comments "connection_desc", mmd_cnx.cnx_subtype_name "database type",
+cnx.connect_string "connect_string", mmd_cnx_attr.attr_name "attribute_name",
+cnx_attr.attr_value "attribute_value",cnx.user_name "user_name"
+from opb_cnx cnx, opb_object_type otype, opb_reposit repo, opb_cnx_attr cnx_attr, opb_mmd_cnx mmd_cnx, opb_mmd_cnx_attr mmd_cnx_attr
+where  otype.object_type_id = cnx.object_type
+and cnx.object_type = mmd_cnx.cnx_object_type
+and cnx.object_subtype = mmd_cnx.cnx_object_subtype
+and mmd_cnx_attr.object_type= mmd_cnx.cnx_object_type
+and mmd_cnx_attr.object_subtype= mmd_cnx.cnx_object_subtype
+and cnx.object_id=cnx_attr.object_id
+and mmd_cnx_attr.object_type= cnx_attr.object_type
+and mmd_cnx_attr.object_subtype= cnx_attr.object_subtype
+and mmd_cnx_attr.attr_id=cnx_attr.attr_id
+and cnx.connect_string = 'connstring'
+and USER_name = 'username'
+and repo.recid = 1
+
+
+-->Query to get the session and workflow statistics.
+
+SELECT DISTINCT
+subject_area,wfname, inst_name, run_hour,start_time,end_time,targ_success_rows,targ_failed_rows,first_error_msg
+FROM (  SELECT a.subject_area,MAX (a.workflow_name) AS wfname,
+                a.workflow_run_id,
+                a.instance_id,
+                b.targ_success_rows,
+                b.targ_failed_rows,
+                b.first_error_msg,
+                a.start_time,
+                a.end_time,
+                MAX (a.instance_name) AS INST_Name,
+                TRUNC (AVG (a.END_TIME-a.START_TIME) * (10 / 24 * 60), 2)
+                   AS RUN_HOUR
+           FROM REP_TASK_INST_RUN a,opb_sess_task_log b
+          WHERE (a.END_TIME - a.START_TIME) IS NOT NULL 
+          AND a.TASK_TYPE=68
+          and a.workflow_run_id = b.workflow_run_id
+         -- AND TRUNC(A.START_TIME) >= TRUNC(SYSDATE-15) 
+          and start_time between  to_date('05-01-15 12:00:00 AM','mm-dd-yy hh:mi:ss AM')
+and  to_date('05-15-15 12:00:00 AM','mm-dd-yy hh:mi:ss AM') 
+          --and a.subject_area like '%FOLDER_NAME%’
+       GROUP BY a.subject_area,a.workflow_run_id,a.instance_id,targ_success_rows,targ_failed_rows,first_error_msg,a.end_time,a.start_time
+       ORDER BY run_hour DESC);
+--WHERE ROWNUM < 11
+
+
+-->Query to get the list of users and groups.
+--Query on the Domain database to get the list of users and groups which the user belongs.
+SELECT T1.GROUP_NAME,T2.USER_LOGIN,T4.POU_FULLNAME USER_NAME
+from (select POI_NAME GROUP_NAME,PSI_CONTAINER from po_idobj where PSI_DISCRIMINATOR ='GROUP' and POI_NAME!='Everyone') T1,
+(select POI_NAME USER_LOGIN,PSI_CONTAINER from po_idobj where PSI_DISCRIMINATOR ='USERREF' and PSI_CONTAINER!=36) T2,
+(select POI_NAME USER_LOGIN,PSI_CONTAINER from po_idobj where PSI_DISCRIMINATOR ='USER') T3,
+PO_USERINFO T4
+where T1.PSI_CONTAINER(+)=T2.PSI_CONTAINER
+and   T2.USER_LOGIN(+)=T3.USER_LOGIN
+and   T3.PSI_CONTAINER=T4.PSU_RSID
+--and   T3.USER_LOGIN ='INFACL1D'
+order by 1,2
+
+
+--lists groups and users; what 
+with GroupDtls
+as(
+select POI_NAME GROUP_NAME,PSI_CONTAINER from po_idobj 
+where PSI_DISCRIMINATOR ='GROUP' 
+and POI_NAME!='Everyone'),
+userRefDtls as
+(select POI_NAME USER_LOGIN,PSI_CONTAINER from po_idobj where PSI_DISCRIMINATOR ='USERREF' and PSI_CONTAINER!=36)
+select GroupDtls.*,userRefDtls.*
+from    GroupDtls, userRefDtls
+where  GroupDtls.PSI_CONTAINER=userRefDtls.PSI_CONTAINER
+and    Group_name = 'Administrator'
+
+
+---connnection type and name
+select otype.object_type_name "connection_type", cnx.object_name "connection_name",
+cnx.comments "connection_desc", mmd_cnx.cnx_subtype_name "database type",
+cnx.connect_string "connect_string", mmd_cnx_attr.attr_name "attribute_name",
+cnx_attr.attr_value "attribute_value",cnx.user_name "user_name"
+from opb_cnx cnx, opb_object_type otype, opb_reposit repo, opb_cnx_attr cnx_attr, opb_mmd_cnx mmd_cnx, opb_mmd_cnx_attr mmd_cnx_attr
+where  cnx.object_name='<<Connection Name>>'
+and otype.object_type_id = cnx.object_type
+and cnx.object_type = mmd_cnx.cnx_object_type
+and cnx.object_subtype = mmd_cnx.cnx_object_subtype
+and mmd_cnx_attr.object_type= mmd_cnx.cnx_object_type
+and mmd_cnx_attr.object_subtype= mmd_cnx.cnx_object_subtype
+and cnx.object_id=cnx_attr.object_id
+and mmd_cnx_attr.object_type= cnx_attr.object_type
+and mmd_cnx_attr.object_subtype= cnx_attr.object_subtype
+and mmd_cnx_attr.attr_id=cnx_attr.attr_id
+and repo.recid = 1
+
+
+
+--Query to get users and their security groups
+select
+       U.POI_NAME ||'@'||u.poi_securitydomain UserName, G.POI_NAME||'@'||g.poi_securitydomain GroupName, I.POU_FULLNAME                FullName
+FROM
+       PO_IDOBJ    U
+     , PO_IDOBJ    G
+     , po_userinfo I
+where
+       U.psi_container        =G.psi_container
+       and G.psi_discriminator= 'GROUP'
+       and U.psi_discriminator in ( 'USERREF')
+       and I.PSU_OPID          IN
+       (
+              select
+                     POI_USERINFO
+              from
+                     PO_IDOBJ
+              where
+                     PO_IDOBJ.POI_NAME=U.POI_NAME
+                     and
+                     (
+                            psi_discriminator   ='LDAPUSER'
+                            or psi_discriminator='USER'
+                     )
+       )
+
+
+-->Query to get the list of sessions that run longer than 5 Hours.
+
+ SELECT REPOSIT_NAME AS REPOSITORY_NAME FROM OPB_REPOSIT WHERE RECID=1;
+SELECT
+--'INF_ESPROD_REP'AS REPOSITORY_NAME,
+B.SUBJ_NAME AS SUBJECT_AREA,
+A.TASK_NAME AS SESSION_NAME,
+TO_CHAR(A.START_TIME,'DD/MM/YYYY HH24:MI:SS') AS START_TIME,
+       --TO_CHAR(A.START_TIME,'DD.MM.YYYY:HH24:MI:SS') "ACTUAL_START",
+       --TO_CHAR(SYSDATE,'DD.MM.YYYY:HH24:MI:SS') "SYSDATE",
+       TRUNC((((86400*(SYSDATE-A.START_TIME))/60)/60)/24) AS  DAYS,
+           TRUNC(((86400*(SYSDATE-A.START_TIME))/60)/60)-24*(TRUNC((((86400*(SYSDATE-A.START_TIME))/60)/60)/24)) AS HOURS,
+       TRUNC((86400*(SYSDATE-A.START_TIME))/60)-60*(TRUNC(((86400*(SYSDATE-A.START_TIME))/60)/60)) AS MINS
+FROM
+OPB_TASK_INST_RUN A,OPB_SUBJECT B
+WHERE
+(A.END_TIME IS NULL or (a.end_time < a.start_time)) and
+A.TASK_TYPE IN (68,58,65) AND
+A.SUBJECT_ID=B.SUBJ_ID AND
+((SYSDATE-A.START_TIME)*24) > 5
+
+
+ --to identify Mappings and Sessions under workflows(Including Work lets) based on workflow names.
+SELECT
+       F.SUBJ_NAME  As   FOLDER_NAME,
+       WF.TASK_NAME       AS WORKFLOW_NAME,
+       SESS.INSTANCE_NAME AS SESSION_NAME,
+       M.MAPPING_NAME     AS MAPPING_NAME
+FROM   OPB_SUBJECT F,
+       (SELECT TASK_NAME,TASK_ID,
+               SUBJECT_ID,IS_VISIBLE,
+               TASK_TYPE,MAX(VERSION_NUMBER)
+        FROM   OPB_TASK
+        GROUP  BY TASK_NAME,TASK_ID,SUBJECT_ID,IS_VISIBLE,
+                  TASK_TYPE) WF,
+       (SELECT WORKFLOW_ID,INSTANCE_ID,
+               TASK_ID,INSTANCE_NAME
+        FROM   OPB_TASK_INST
+        WHERE  ( WORKFLOW_ID, INSTANCE_ID, TASK_ID, VERSION_NUMBER ) IN
+        (SELECT   WORKFLOW_ID,INSTANCE_ID,
+               TASK_ID,VERSION_NUMBER
+                             FROM
+               (SELECT WORKFLOW_ID,INSTANCE_ID,
+                       TASK_ID,
+                       MAX(VERSION_NUMBER)
+                          AS VERSION_NUMBER
+               FROM  OPB_TASK_INST
+                       GROUP  BY WORKFLOW_ID,INSTANCE_ID,
+                                 TASK_ID))) WL,
+       (SELECT WORKFLOW_ID,INSTANCE_ID,
+               TASK_ID,INSTANCE_NAME,
+               TASK_TYPE
+        FROM   OPB_TASK_INST
+        WHERE  ( WORKFLOW_ID, INSTANCE_ID, TASK_ID, VERSION_NUMBER ) IN
+        (SELECT   WORKFLOW_ID,INSTANCE_ID,
+               TASK_ID,VERSION_NUMBER
+                         FROM
+               (SELECT  WORKFLOW_ID,INSTANCE_ID,
+                       TASK_ID,MAX(VERSION_NUMBER)
+                         AS VERSION_NUMBER
+               FROM   OPB_TASK_INST
+                      GROUP  BY WORKFLOW_ID,INSTANCE_ID,TASK_ID))) SESS,
+       (SELECT SESSION_ID,MAPPING_ID,
+               MAX(VERSION_NUMBER)
+        FROM   OPB_SESSION
+        GROUP  BY SESSION_ID,MAPPING_ID) S,
+       (SELECT MAPPING_NAME,IS_VISIBLE,
+               MAPPING_ID,MAX(VERSION_NUMBER)
+        FROM   OPB_MAPPING
+        GROUP  BY MAPPING_NAME,IS_VISIBLE,MAPPING_ID) M
+WHERE  WF.IS_VISIBLE = 1
+       AND WF.SUBJECT_ID = F.SUBJ_ID
+       AND WF.TASK_ID = WL.WORKFLOW_ID
+       AND WF.TASK_TYPE = 71
+       AND ( WL.TASK_ID = SESS.WORKFLOW_ID
+              OR WL.WORKFLOW_ID = SESS.WORKFLOW_ID )
+       AND WF.IS_VISIBLE = 1
+       AND SESS.TASK_TYPE IN (  58,68 )
+       AND SESS.TASK_ID = S.SESSION_ID
+       AND S.MAPPING_ID = M.MAPPING_ID
+       AND M.IS_VISIBLE = 1
+       AND F.SUBJ_NAME = 'FOLDER_NAME'
+       AND WF.TASK_NAME ='WORKFLOW_NAME'
+       group by F.SUBJ_NAME,WF.TASK_NAME,SESS.INSTANCE_NAME,M.MAPPING_NAME
+
+
+/*This query will display the count of the workflow(s), grouped by the folder name in the repository*/
+
+SELECT   SUBJECT_AREA AS FOLDER_NAME, COUNT(WORKFLOW_NAME) AS TOTAL_WORKFLOWS
+FROM REP_WORKFLOWS
+GROUP BY SUBJECT_AREA
+ORDER BY 1, 2
+
+
+/*This Query will give you list of Worflows, it’s total run time grouped by folder name
+  this indicates demand from that project
+*/
+SELECT   SUBJECT_AREA as FOLDER_NAME, WORKFLOW_NAME , TO_NUMBER(substr((END_TIME-START_TIME),instr((END_TIME-START_TIME),' ')+10,3)/ 100) as AVG_WKF_RUN_TIME
+FROM   REP_WFLOW_RUN
+Where START_TIME >= add_months(end_time,-3)
+Group By SUBJECT_AREA, WORKFLOW_NAME,TO_NUMBER(substr((END_TIME-START_TIME),instr((END_TIME-START_TIME),' ')+10,3)/ 100)
+
+-- HOURLY JOB EXECUTION COUNT...
+SELECT /*PARALLEL(6)*/ 
+    SERVER_NAME, 
+    SUBJECT_AREA,
+    WORKFLOW_NAME,
+    TASK_NAME,
+    to_char(m.START_TIME, 'YYYY') || '-' || 
+    to_char(m.START_TIME, 'MM') || '-' || 
+    to_char(m.START_TIME, 'DD') || ' ' ||
+    to_char(m.START_TIME, 'HH24') || ':00:00' AS TIME_OF_DAY, 
+    COUNT (*) AS NO_OF_TASKS
+FROM 
+    REP_TASK_INST_RUN m
+WHERE --TASK_TYPE != 62
+    --AND 
+    START_TIME >= SYSDATE-2
+    and END_TIME   <= SYSDATE -1
+GROUP BY 
+  SERVER_NAME,
+  SUBJECT_AREA,
+    WORKFLOW_NAME,
+    TASK_NAME,
+  to_char(m.START_TIME, 'YYYY') || '-' || 
+  to_char(m.START_TIME, 'MM') || '-' || 
+  to_char(m.START_TIME, 'DD') || ' ' ||
+  to_char(m.START_TIME, 'HH24') || ':00:00'
+ORDER BY TIME_OF_DAY
+
+       		 
+        --2.1 List folder details
+        SELECT SUBJ_NAME,SUBJ_DESC FROM OPB_SUBJECT ORDER BY 1,2
+
+        --2.2 List of shared folders
+         SELECT SUBJ_NAME,SUBJ_DESC FROM OPB_SUBJECT 
+        WHERE IS_SHARED <>0
+        ORDER BY 1,2
+
+        --2.3 List of Users and groups having privileges on Folders
+         SELECT subj.subj_name folder_name, user_group.NAME
+        user_name,
+        DECODE (obj_access.user_type, 1, 'USER', 2, 'GROUP') TYPE,
+        CASE WHEN ((obj_access.permissions
+        - (obj_access.user_id
+        + 1)) IN (8, 16))THEN 'READ'        
+        WHEN ((obj_access.permissions
+        - (obj_access.user_id
+        + 1)) IN (10, 20))THEN 'READ & EXECUTE'
+        WHEN ((obj_access.permissions
+        - (obj_access.user_id
+        + 1)) IN (12, 24))THEN 'READ & WRITE'
+        WHEN ((obj_access.permissions
+        - (obj_access.user_id
+        + 1)) IN (14, 28))THEN 'READ, WRITE & EXECUTE'
+        ELSE 'NO PERMISSIONS'
+        END permissions
+        FROM opb_object_access obj_access,opb_subject
+        subj,opb_user_group user_group
+        WHERE
+        obj_access.object_type = 29
+        AND obj_access.object_id
+        =
+        subj.subj_id
+        AND obj_access.user_id
+        =
+        user_group.ID
+        AND obj_access.user_type
+        =
+        user_group.TYPE
+         --  and
+        user_group.NAME not in ('Admin','READ_ONLY','Administrator','Administrators')
+        order by 1,2,3
+
+
+        --2.4           List of folders Owners
+        select (select repository_name from OPB_REPOSIT_INFO) repo_name,
+        a.SUBJ_NAME,b.NAME
+        from opb_subject a, opb_user_group b
+        where a.owner_id = b.id
+        order by 1,2
+
+        --3 SOURCE
+         --3.1  List of source tables
+         SELECT
+        B.SUBJ_NAME,
+        C.DBDNAM,
+        D.DBTYPE_NAME,
+        A.SOURCE_NAME
+        AS
+        TABLE_NAME,
+        A.FILE_NAME
+        SCHEMA_NAME,
+        A.OWNERNAME
+        FROM
+        OPB_SRC A,OPB_SUBJECT B, OPB_DBD C,OPB_MMD_DBTYPE D
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        AND A.DBDID = C.DBDID
+        AND C.DBTYPE = D.DBTYPE_ID
+        --AND A.SOURCE_NAME
+        <> A.FILE_NAME
+        ORDER BY 1,2,3,4,5
+
+        --3.2 List and count of tables in each folder by db type
+        SELECT
+        B.SUBJ_NAME,
+        D.DBTYPE_NAME,
+        count(*)
+        FROM
+        OPB_SRC A,OPB_SUBJECT B, OPB_DBD C,OPB_MMD_DBTYPE D
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        AND A.DBDID = C.DBDID
+        AND C.DBTYPE = D.DBTYPE_ID
+        --AND A.SOURCE_NAME
+        <> A.FILE_NAME
+        group by B.SUBJ_NAME,D.DBTYPE_NAME
+        order by 1,2,3
+        --3.3 List and count of tables overall used
+        SELECT SOURCE_NAME, COUNT(SOURCE_NAME) FROM
+        REP_TBL_MAPPING
+        GROUP BY SOURCE_NAME
+        ORDER BY 1,2 ASC
+
+        --3.4 List of source tables used in mapping
+        SELECT
+        SUBJECT_AREA,SOURCE_NAME,MAPPING_NAME FROM REP_SRC_MAPPING
+        ORDER BY 1,2,3
+
+        --3.5 List of source tables using as shortcuts
+         SELECT DISTINCT
+        B.SUBJ_NAME,
+        C.DBDNAM,
+        D.DBTYPE_NAME,
+        A.SOURCE_NAME AS TABLE_NAME,
+        A.FILE_NAME SCHEMA_NAME,
+        A.OWNERNAME
+        FROM
+        OPB_SRC A,OPB_SUBJECT B, OPB_DBD C,OPB_MMD_DBTYPE D
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        AND A.DBDID = C.DBDID
+        AND C.DBTYPE = D.DBTYPE_ID
+        --AND A.SOURCE_NAME <> A.FILE_NAME
+        and A.SOURCE_NAME like 'sc_%'
+        ORDER BY 1,2,3,4,5
+
+        --3.6 List Sequence Generator Value
+        SELECT a.attr_value AS current_value, b.WIDGET_NAME AS Transformation_name
+          FROM rep_widget_attr a, REP_ALL_TRANSFORMS b
+         WHERE     a.attr_id = 4
+               AND a.widget_id IN (SELECT widget_id
+                                     FROM REP_ALL_TRANSFORMS
+        WHERE widget_type_name LIKE 'Sequence')
+               AND a.widget_id = b.widget_id
+
+        --3.7 List Source tables, Mapping Names and Source Database Name
+        SELECT REP_ALL_SOURCES.SOURCE_NAME,
+        REP_SRC_MAPPING.MAPPING_NAME,
+        REP_ALL_SOURCES.SOURCE_DATABASE_NAME
+          FROM REP_SRC_MAPPING, REP_ALL_SOURCES
+         WHERE REP_SRC_MAPPING.SOURCE_ID(+) = REP_ALL_SOURCES.SOURCE_ID
+               AND REP_SRC_MAPPING.SOURCE_NAME(+) =
+        REP_ALL_SOURCES.PARENT_SOURCE_NAME
+               AND REP_SRC_MAPPING.SUBJECT_ID(+) = REP_ALL_SOURCES.SUBJECT_ID
+
+        --4  TARGET
+         -- 4.1 List of Target Tables
+         SELECT B.SUBJ_NAME,
+        A.TARGET_NAME,
+        DECODE(A.DBTYPE,
+        0,'VSAM',
+        1,'IMS',
+        2,'Sybase',
+        3,'Oracle',
+        4,'Informix',
+        5,'Microsoft
+        SQL Server',
+        6,'DB2',
+        7,'Flat
+        File',
+        8,'ODBC',
+        9,'SAP
+        BW',
+        10,'PeopleSoft',
+        11,'SAP
+        R/3',
+        12,'XML',
+        13,'MQSeries',
+        14,'Siebel',
+        15,'Teradata' ) as DB_TYPE
+        FROM
+        OPB_TARG A,
+        OPB_SUBJECT B
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        ORDER BY 1,2,3
+
+        --4.2  List and count of tables in each folder by db type
+         SELECT B.SUBJ_NAME,
+        DECODE(A.DBTYPE,
+        0,'VSAM',
+        1,'IMS',
+        2,'Sybase',
+        3,'Oracle',
+        4,'Informix',
+        5,'Microsoft
+        SQL Server',
+        6,'DB2',
+        7,'Flat
+        File',
+        8,'ODBC',
+        9,'SAP
+        BW',
+        10,'PeopleSoft',
+        11,'SAP
+        R/3',
+        12,'XML',
+        13,'MQSeries',
+        14,'Siebel',
+        15,'Teradata' ) as DB_TYPE,
+        count(*)
+        FROM
+        OPB_TARG A,
+        OPB_SUBJECT B
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        GROUP BY B.SUBJ_NAME,A.DBTYPE
+        ORDER BY 1,2
+
+        --4.3 List and count of table overall used
+        SELECT SOURCE_NAME, COUNT(SOURCE_NAME) FROM
+        REP_TBL_MAPPING
+        GROUP BY SOURCE_NAME
+        ORDER BY 1,2 ASC
+
+        --4.4 List Target table used in session level
+        SELECT SUBJECT_AREA,SESSION_NAME,SESSION_INSTANCE_NAME,WIDGET_NAME AS
+        TARGET_TABLE_NAME,TYPE_NAME AS TARGET_TYPE FROM REP_SESS_TBL_LOG
+        ORDER BY 1,2,3
+
+        --4.5 Truncate target Table Option
+         SELECT DISTINCT
+        C.SUBJ_NAME,A.TASK_NAME
+        SESSION_NAME, DECODE(B.ATTR_VALUE,1,'YES','NO')  TRUNCATE_TARGET_TABLE
+                 FROM  OPB_TASK
+        A
+        ,
+        OPB_EXTN_ATTR
+        B, OPB_SUBJECT
+        C
+        WHERE B.SESSION_ID=A.TASK_ID
+        AND A.SUBJECT_ID
+        =
+        C.SUBJ_ID
+        AND A.TASK_TYPE
+        =
+        68
+        AND B.ATTR_ID=9
+        ORDER
+        BY
+        1,2,3
+
+        --5 TRANSFORMATION
+        --5.1 List of filer transformations
+        SELECT SUBSTR(WIDGET_NAME,1,3), COUNT(WIDGET_NAME)
+        FROM REP_ALL_TRANSFORMS
+        WHERE WIDGET_TYPE_NAME = 'Filter'
+        GROUP BY SUBSTR(WIDGET_NAME,1,3)
+
+        --5.2 List of Sequence transformations
+        SELECT DISTINCT
+        SUBJECT_AREA, PARENT_WIDGET_NAME FROM REP_ALL_TRANSFORMS WHERE WIDGET_TYPE_NAME
+        ='Sequence' ORDER BY 1,2
+
+        --5.3 List of tables used as lookups
+        SELECT DISTINCT
+        B.PARENT_SUBJECT_AREA
+        AS
+        FOLDER_NAME,
+        C.ATTR_VALUE
+        AS
+        TABLE_NAME,A.INSTANCE_NAME AS TRANSFORMATION_NAME, A.WIDGET_TYPE_NAME
+        AS
+        TRANSFORMATION_TYPE,B.MAPPING_NAME
+        FROM
+        REP_WIDGET_INST A INNER JOIN
+        REP_ALL_MAPPINGS B ON A.MAPPING_ID = B.MAPPING_ID INNER JOIN
+        REP_WIDGET_ATTR C ON A.WIDGET_ID
+        = C.WIDGET_ID
+        WHERE
+        C.ATTR_DESCRIPTION
+        LIKE 'Lookup source table'
+        ORDER BY 1,2,3,4,5
+
+        --5.4 List of transformations using sql overrides
+        SELECT DISTINCT
+        d.subject_area
+        AS
+        Folder, d.mapping_name, a.widget_type_name
+        AS
+        Transformation_Type,
+        a.instance_name
+        as
+        Transformation_Name, b.attr_name, b.attr_value, c.session_name 
+        FROM
+        REP_WIDGET_INST a,
+        REP_WIDGET_ATTR b, REP_LOAD_SESSIONS c, REP_ALL_MAPPINGS d
+        WHERE b.widget_id = a. widget_id
+        AND b.widget_type = a.
+        widget_type
+        AND b.widget_type in (3, 11)
+        AND c.mapping_id = a.mapping_id
+        AND d.mapping_id = a.mapping_id
+        AND b.attr_id= 1
+        AND b.attr_datatype=2 and b.attr_type=3
+        ORDER BY d.subject_area, d.mapping_name
+
+
+        --5.5 List all transformations
+         SELECT DISTINCT version_subject.subject_area "FOLDER_NAME",  version_props.object_name "OBJECT_NAME",
+        CASE
+        WHEN version_props.object_type = 1 THEN 'Source Definition'                                ELSE CASE
+        WHEN version_props.object_type = 2 THEN 'Target Definition'                                ELSE CASE
+        WHEN version_props.object_type = 3 THEN 'Source Qualifier'                                  ELSE CASE
+        WHEN version_props.object_type = 4 THEN 'Update Strategy'                                 ELSE CASE
+        WHEN version_props.object_type = 5 THEN 'Expression'                                           ELSE CASE
+        WHEN version_props.object_type = 6 THEN 'Stored Procedure'                                ELSE CASE
+        WHEN version_props.object_type = 7 THEN 'Sequence'                            ELSE CASE
+        WHEN version_props.object_type = 8 THEN 'External Procedure'                             ELSE CASE
+        WHEN version_props.object_type = 9 THEN 'Aggregator'                                          ELSE CASE
+        WHEN version_props.object_type = 10 THEN 'Filter'                                                                 ELSE CASE
+        WHEN version_props.object_type = 11 THEN 'Lookup Procedure'                             ELSE CASE
+        WHEN version_props.object_type = 12 THEN 'Joiner'                                                 ELSE CASE
+        WHEN version_props.object_type = 13 THEN 'Procedure'                           ELSE CASE
+        WHEN version_props.object_type = 14 THEN 'Normalizer'                         ELSE CASE
+        WHEN version_props.object_type = 16 THEN 'Merger'                                               ELSE CASE
+        WHEN version_props.object_type = 17 THEN 'Pivot'                                   ELSE CASE
+        WHEN version_props.object_type = 18 THEN 'Session Obsolete'                              ELSE CASE
+        WHEN version_props.object_type = 19 THEN 'Batch'                                                  ELSE CASE
+        WHEN version_props.object_type = 20 THEN 'Shortcut'                             ELSE CASE
+        WHEN version_props.object_type = 21 THEN 'Mapping'                             ELSE CASE
+        WHEN version_props.object_type = 26 THEN 'Rank'                                   ELSE CASE
+        WHEN version_props.object_type = 27 THEN 'Star Schema'                      ELSE CASE
+        WHEN version_props.object_type = 28 THEN 'Folder Version'                   ELSE CASE
+        WHEN version_props.object_type = 29 THEN 'Folder'                                                 ELSE CASE
+        WHEN version_props.object_type = 30 THEN 'Cube'                                   ELSE CASE
+        WHEN version_props.object_type = 31 THEN 'Dimension'                          ELSE CASE
+        WHEN version_props.object_type = 32 THEN 'Level'                                   ELSE CASE
+        WHEN version_props.object_type = 33 THEN 'Hierarchy'                           ELSE CASE
+        WHEN version_props.object_type = 34 THEN 'Fact Table'                          ELSE CASE
+        WHEN version_props.object_type = 35 THEN 'General Object'                                 ELSE CASE
+        WHEN version_props.object_type = 36 THEN 'FTP Object'                         ELSE CASE
+        WHEN version_props.object_type = 37 THEN 'Oracle External Loader Object'          ELSE CASE
+        WHEN version_props.object_type = 38 THEN 'Informix External Loader Object'                       ELSE CASE
+        WHEN version_props.object_type = 39 THEN 'Sybase IQ External Loader Object'     ELSE CASE
+        WHEN version_props.object_type = 54 THEN 'Sybase IQ 12 External Loader Object'                ELSE CASE
+        WHEN version_props.object_type = 53 THEN 'Tera Data External Loader Object'     ELSE CASE
+        WHEN version_props.object_type = 40 THEN 'File Object'                         ELSE CASE
+        WHEN version_props.object_type = 41 THEN 'Server Object'                    ELSE CASE
+        WHEN version_props.object_type = 42 THEN 'Database Object'                               ELSE CASE
+        WHEN version_props.object_type = 43 THEN 'Repository'                          ELSE CASE
+        WHEN version_props.object_type = 44 THEN 'Mapplet'                             ELSE CASE
+        WHEN version_props.object_type = 45 THEN 'Application Source Qualifier'             ELSE CASE
+        WHEN version_props.object_type = 46 THEN 'Input Transformation'                       ELSE CASE
+        WHEN version_props.object_type = 47 THEN 'Output Transformation'                    ELSE CASE
+        WHEN version_props.object_type = 50 THEN 'Advanced External Procedure'           ELSE CASE
+        WHEN version_props.object_type = 48 THEN 'Business Component Framework'    ELSE CASE
+        WHEN version_props.object_type = 49 THEN 'Business Component'                        ELSE CASE
+        WHEN version_props.object_type = 51 THEN 'SAP Structure'                    ELSE CASE
+        WHEN version_props.object_type = 52 THEN 'SAP Function'                     ELSE CASE
+        WHEN version_props.object_type = 15 THEN 'Router'                                               ELSE CASE
+        WHEN version_props.object_type = 55 THEN 'XML Source Qualifier'                        ELSE CASE
+        WHEN version_props.object_type = 56 THEN 'MQ Source Qualifier'                         ELSE CASE
+        WHEN version_props.object_type = 57 THEN 'MQ Connection Object'                     ELSE CASE
+        WHEN version_props.object_type = 58 THEN 'Command'                         ELSE CASE
+        WHEN version_props.object_type = 59 THEN 'Decision'                            ELSE CASE
+        WHEN version_props.object_type = 60 THEN 'Event Wait'                        ELSE CASE
+        WHEN version_props.object_type = 61 THEN 'Event Raise'                       ELSE CASE
+        WHEN version_props.object_type = 62 THEN 'Start'                                  ELSE CASE
+        WHEN version_props.object_type = 63 THEN 'Abort'                                                 ELSE CASE
+        WHEN version_props.object_type = 64 THEN 'Stop'                                   ELSE CASE
+        WHEN version_props.object_type = 65 THEN 'Email'                                                 ELSE CASE
+        WHEN version_props.object_type = 66 THEN 'Timer'                                                ELSE CASE
+        WHEN version_props.object_type = 67 THEN 'Assignment'                       ELSE CASE
+        WHEN version_props.object_type = 68 THEN 'Session'                                              ELSE CASE
+        WHEN version_props.object_type = 69 THEN 'Scheduler'                          ELSE CASE
+        WHEN version_props.object_type = 70 THEN 'Worklet'                             ELSE CASE
+        WHEN version_props.object_type = 71 THEN 'Workflow'                          ELSE CASE
+        WHEN version_props.object_type = 72 THEN 'SessionConfig'                   ELSE CASE
+        WHEN version_props.object_type = 73 THEN 'Relational'                         ELSE CASE
+        WHEN version_props.object_type = 74 THEN 'Application'                        ELSE CASE
+        WHEN version_props.object_type = 75 THEN 'FTP'                                    ELSE CASE
+        WHEN version_props.object_type = 76 THEN 'External Loader'                                 ELSE CASE
+        WHEN version_props.object_type = 77 THEN 'Queue'                                               ELSE CASE
+        WHEN version_props.object_type = 78 THEN 'Reader'                                              ELSE CASE
+        WHEN version_props.object_type = 79 THEN 'Writer'                                               ELSE CASE
+        WHEN version_props.object_type = 80 THEN 'Sorter'                                                ELSE CASE
+        WHEN version_props.object_type = 81 THEN 'Vendor'                                              ELSE CASE
+        WHEN version_props.object_type = 84 THEN 'App Multi-Group Source Qualifier'   ELSE CASE
+        WHEN version_props.object_type = 91 THEN 'Control'                                              ELSE CASE
+        WHEN version_props.object_type = 92 THEN 'Transaction Control'                          ELSE CASE
+        WHEN version_props.object_type = 97 THEN 'Custom Transformation'                   ELSE CASE
+        WHEN version_props.object_type = 93 THEN 'Query'                                                ELSE CASE
+        WHEN version_props.object_type = 94 THEN 'Deployment Group'                           ELSE CASE
+        WHEN version_props.object_type = 95 THEN 'Label'                                                 ELSE CASE
+        WHEN version_props.object_type = 96 THEN 'Deployed Deployment Group'           ELSE CASE
+        WHEN version_props.object_type = 98 THEN 'Server Grid'                        ELSE CASE
+        WHEN version_props.object_type = 99 THEN 'Profiling Ruleset'                               ELSE CASE
+        WHEN version_props.object_type = 100 THEN 'Template Extension'                        ELSE CASE
+        WHEN version_props.object_type = 101 THEN 'Global Profile Resource'                  ELSE CASE
+        WHEN version_props.object_type = 102 THEN 'Web Services Hub'                          ELSE CASE
+        WHEN version_props.object_type = 103 THEN 'Lookup Extension'                            ELSE CASE
+        WHEN version_props.object_type = 105 THEN 'Service Level'                   ELSE CASE
+        WHEN version_props.object_type = 106 THEN 'User Defined Function' ELSE 'Shortcut'
+           END            END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END
+        END "OBJECT_TYPE"
+        FROM rep_users version_users,
+        rep_version_props version_props,
+        rep_reposit_info version_reposit_info,
+        rep_subject version_subject
+        WHERE (version_props.user_id = version_users.user_id
+        AND version_props.object_id <> version_reposit_info.repository_id
+        AND version_props.subject_id = version_subject.subject_id
+        )
+        ORDER BY 3, 1;
+
+        --5.6 List all Expression transformations using CONCATNATION function
+        SELECT DISTINCT REP_ALL_MAPPINGS.SUBJECT_AREA,
+        REP_ALL_MAPPINGS.MAPPING_NAME,                REP_WIDGET_INST.WIDGET_TYPE_NAME
+        AS
+        TRANSFORMATION_TYPE,               
+        REP_WIDGET_INST.INSTANCE_NAME AS TRANSFORMATION_NAME,                REP_WIDGET_FIELD.FIELD_NAME
+        AS
+        PORT_NAME,
+        CASE
+          WHEN REP_WIDGET_FIELD.PORTTYPE
+        = 1 THEN 'I'
+          WHEN REP_WIDGET_FIELD.PORTTYPE
+        = 2 THEN 'O'
+          WHEN REP_WIDGET_FIELD.PORTTYPE
+        = 3 THEN 'IO'
+          WHEN REP_WIDGET_FIELD.PORTTYPE
+        = 32 THEN 'V'
+        END AS PORT_TYPE,
+        REP_WIDGET_FIELD.EXPRESSION
+        FROM REP_WIDGET_INST, REP_WIDGET_FIELD,
+        REP_ALL_MAPPINGS
+        WHERE REP_WIDGET_INST.WIDGET_ID =
+        REP_WIDGET_FIELD.WIDGET_ID
+        AND REP_WIDGET_INST.MAPPING_ID =
+        REP_ALL_MAPPINGS.MAPPING_ID
+        AND REP_WIDGET_INST.WIDGET_TYPE = 5
+        AND REP_WIDGET_FIELD.EXPRESSION LIKE '%CONCAT%'
+        ORDER BY 1;
+
+        --5.7 List of all port details of an Expression transformations
+        SELECT S.SUBJ_NAME, W.WIDGET_NAME, F.FIELD_ID,F.FIELD_NAME,E.VERSION_NUMBER, E.EXPRESSION FROM OPB_WIDGET W, OPB_SUBJECT S, OPB_WIDGET_FIELD F, OPB_WIDGET_EXPR R, OPB_EXPRESSION E
+        WHERE W.SUBJECT_ID=S.SUBJ_ID AND W.WIDGET_ID=F.WIDGET_ID
+        AND W.WIDGET_ID=R.WIDGET_ID AND F.FIELD_ID=R.OUTPUT_FIELD_ID
+        AND W.WIDGET_ID=E.WIDGET_ID AND R.EXPR_ID=E.EXPR_ID
+        AND W.VERSION_NUMBER = F.VERSION_NUMBER
+        AND F.VERSION_NUMBER = R.VERSION_NUMBER
+        AND R.VERSION_NUMBER = E.VERSION_NUMBER
+        AND W.IS_VISIBLE = 1
+        AND W.WIDGET_NAME LIKE 'EXP_%'
+        ORDER BY 1,2,3;
+
+        --5.8  List of all Expression transformation port links
+         SELECT DISTINCT S.SUBJ_NAME, WF.INSTANCE_NAME ||'.'|| F.FIELD_NAME
+        FROM_NAME, F.FIELD_ORDER
+        AS
+        EXP_PORT_ORDER,
+        WT.INSTANCE_NAME
+        ||'.'|| T.FIELD_NAME TO_NAME,  T.FIELD_ORDER
+        FROM OPB_WIDGET Z, OPB_WIDGET_INST WF, OPB_WIDGET_INST WT,
+        OPB_WIDGET_FIELD F, OPB_WIDGET_FIELD T, OPB_WIDGET_DEP D, OPB_SUBJECT S
+        WHERE Z.SUBJECT_ID = S.SUBJ_ID
+        AND Z.IS_VISIBLE = 1
+        AND Z.WIDGET_ID = F.WIDGET_ID
+        AND Z.WIDGET_ID = WF.WIDGET_ID
+        AND Z.RU_VERSION_NUMBER = WF.VERSION_NUMBER
+        AND WF.REF_VERSION_NUMBER = F.VERSION_NUMBER
+        AND WF.VERSION_NUMBER = D.VERSION_NUMBER
+        AND WF.MAPPING_ID = D.MAPPING_ID
+        AND WF.INSTANCE_ID = D.FROM_INSTANCE_ID
+        AND F.FIELD_ID = D.FROM_FIELD_ID
+        AND D.TO_INSTANCE_ID = WT.INSTANCE_ID
+        AND D.TO_FIELD_ID = T.FIELD_ID
+        AND D.MAPPING_ID = WT.MAPPING_ID
+        AND D.VERSION_NUMBER = WT.VERSION_NUMBER
+        AND WT.WIDGET_ID = T.WIDGET_ID
+        AND WT.REF_VERSION_NUMBER = T.VERSION_NUMBER
+        --AND Z.WIDGET_NAME LIKE
+        'EXP_%'
+        AND S.SUBJ_NAME = :FOLDER_NAME
+        AND WF.INSTANCE_NAME = :EXP_NAME
+        ORDER BY 1,2,3;
+
+        --5.9 List of LKP
+        transformation port links used in all mappings
+        SELECT DISTINCT OPB_SUBJECT.SUBJ_NAME,OPB_MAPPING.MAPPING_NAME,
+        OPB_WIDGET_FIELD.FIELD_NAME FIELD_NAME,
+        OPB_EXPRESSION.EXPRESSION EXPRESSION
+        FROM OPB_WIDGET_EXPR, OPB_EXPRESSION, OPB_WIDGET_FIELD, REP_FLD_DATATYPE, OPB_WIDGET, OPB_SUBJECT,OPB_WIDGET_INST,OPB_MAPPING
+        WHERE
+        OPB_WIDGET_FIELD.WIDGET_ID = OPB_WIDGET.WIDGET_ID
+        AND OPB_WIDGET.SUBJECT_ID
+        = OPB_SUBJECT.SUBJ_ID
+        AND OPB_WIDGET_INST.WIDGET_ID = OPB_WIDGET.WIDGET_ID
+        AND OPB_MAPPING.MAPPING_ID
+        = OPB_WIDGET_INST.MAPPING_ID
+        AND OPB_WIDGET_FIELD.VERSION_NUMBER = OPB_WIDGET.VERSION_NUMBER
+        AND OPB_WIDGET.IS_VISIBLE
+        = 1
+        AND OPB_WIDGET_FIELD.WIDGET_ID= OPB_WIDGET_EXPR.WIDGET_ID
+        AND OPB_WIDGET_FIELD.FIELD_ID= OPB_WIDGET_EXPR.OUTPUT_FIELD_ID
+        AND OPB_WIDGET_EXPR.WIDGET_ID=OPB_EXPRESSION.WIDGET_ID
+        AND OPB_WIDGET_EXPR.EXPR_ID=OPB_EXPRESSION.EXPR_ID
+        AND OPB_EXPRESSION.LINE_NO = 1
+        AND OPB_WIDGET_EXPR.VERSION_NUMBER = OPB_EXPRESSION.VERSION_NUMBER
+        AND OPB_WIDGET_EXPR.VERSION_NUMBER = OPB_WIDGET_FIELD.VERSION_NUMBER
+        --AND OPB_SUBJECT.SUBJ_NAME =
+        'FOLDER_NAME'
+        --AND OPB_MAPPING.MAPPING_NAME =
+        'MAPPING_NAME'
+        AND UPPER(EXPRESSION) LIKE '%LKP_ACCT_B%'
+        ORDER BY 1,2;
+
+        --5.10  Identify ports in EXP (I, IO, O,V Ports)
+        SELECT rep_all_mappings.subject_area, rep_all_mappings.mapping_name,
+        rep_widget_inst.widget_type_name AS transformation_type,
+        rep_widget_inst.instance_name AS transformation_name, rep_widget_field.field_name
+        AS port_name,
+        CASE WHEN rep_widget_field.porttype=1 THEN 'I'
+        WHEN rep_widget_field.porttype=2 THEN 'O'
+        WHEN rep_widget_field.porttype=3 THEN 'IO'
+        WHEN rep_widget_field.porttype=32 THEN 'V'
+        END AS port_type,
+        rep_widget_field.expression
+        FROM rep_widget_inst, rep_widget_field, rep_all_mappings
+        WHERE rep_widget_inst.widget_id=rep_widget_field.widget_id
+        AND rep_widget_inst.mapping_id=rep_all_mappings.mapping_id
+        AND rep_widget_inst.widget_type IN (5,9);
+
+        --5.11    SQ and Lookup SQL
+         SELECT DISTINCT
+        C.SUBJECT_AREA,
+        C.MAPPING_NAME,C.MAPPING_ID,
+        B.WIDGET_TYPE_NAME AS TRANSFORMATION_TYPE,
+        B.INSTANCE_NAME AS TRANSFORMATION_NAME,
+        X.SQL_SQUERY
+        FROM
+        (SELECT A.ATTR_NAME,A.ATTR_VALUE AS SQL_SQUERY,A.WIDGET_ID,A.MAPPING_ID FROM REP_WIDGET_ATTR A
+        WHERE WIDGET_TYPE IN (3,11) -- USE
+        3 FOR SOURCE QUALIFIER AND 11 FOR LOOKUP PROCEDURE
+        AND A.ATTR_ID= 1
+        AND A.ATTR_VALUE IS NOT NULL) X,
+        REP_WIDGET_INST B,
+        REP_ALL_MAPPINGS C
+        WHERE
+        X.WIDGET_ID = B. WIDGET_ID
+        AND X.MAPPING_ID = C.MAPPING_ID
+        ORDER BY 1,2,3
+
+        --5.12      B2B Transformation List
+        with b2b_widgets as (
+          select widget_id from opb_widget_attr where attr_value='pmudtsrv'
+        )
+        select
+          F.SERVER_NAME as Server_name,
+          F.SUBJECT_AREA as Folder_name,
+          F.WORKFLOW_NAME as workflow_name,
+          E.INSTANCE_NAME as session_name,
+          C.MAPPING_NAME,
+          B.instance_name as trans_name
+        from
+          b2b_widgets A
+          inner join opb_widget_inst B
+            on A.widget_id = B.widget_id
+          inner join opb_mapping C
+            on B.mapping_id = C.Mapping_id
+          inner join opb_session D
+            on B.mapping_id = D.mapping_id
+          inner join REP_TASK_INST E
+            on D.session_id = E.task_id
+          inner join REP_WORKFLOWS F
+            on E.workflow_id = F.workflow_id;
+
+        --6   MAPPING
+        --6.1 List mapping names
+         SELECT   SUBJECT_AREA, PARENT_MAPPING_NAME
+            FROM REP_ALL_MAPPINGS
+        ORDER BY 1, 2;
+
+        --6.2 List total count of mappings
+         SELECT   SUBJECT_AREA, COUNT(PARENT_MAPPING_NAME) AS TOTAL_MAPPINGS
+            FROM REP_ALL_MAPPINGS
+              GROUP BY SUBJECT_AREA
+         ORDER BY 1, 2;
+        --6.3 List last saved user for a mapping
+         SELECT REP_SUBJECT.SUBJECT_AREA "FOLDER",REP_VERSION_PROPS.OBJECT_NAME
+        "MAPPING", REP_USERS.USER_NAME,REP_VERSION_PROPS.LAST_SAVED
+        FROM REP_USERS,REP_VERSION_PROPS,REP_SUBJECT
+        WHERE REP_USERS.USER_ID=REP_VERSION_PROPS.USER_ID
+         AND REP_VERSION_PROPS.OBJECT_TYPE
+        IN (21)
+         --AND REP_SUBJECT.SUBJECT_AREA
+        = 'FOLDER_NAME'
+         AND REP_SUBJECT.SUBJECT_ID
+        =
+        REP_VERSION_PROPS.SUBJECT_ID
+        ORDER BY 1,2,3,4;
+
+        --6.4 List Mapping parameters and variables
+        select distinct rep_reposit_info.repository_name,
+        rep_all_mappings.subject_area
+        as folder_name, rep_all_mappings.mapping_name
+        as
+        object_name,
+        case when opb_map_parmvar.pv_flag
+        = 2 then 'Mapping
+        Parameter' else
+        case when opb_map_parmvar.pv_flag
+        = 3 then 'Mapping
+        Variable' end
+        end as parameter_type, opb_map_parmvar.pv_name as
+        parameter_name,
+        opb_map_parmvar.pv_default
+        as
+        parameter_value,
+        opb_map_parmvar.pv_desc
+        as
+        description
+        from rep_all_mappings, opb_map_parmvar, rep_reposit_info
+        where rep_all_mappings.mapping_id = opb_map_parmvar.mapping_id;
+
+        --6.5 List all the mappings using PARALLEL hints
+        SELECT S.SUBJ_NAME, M.MAPPING_NAME, W.WIDGET_NAME, A.WIDGET_ID, W.VERSION_NUMBER,
+        SUBSTR(A.ATTR_VALUE, 1, 60)
+        ATTR_VALUE
+        FROM OPB_WIDGET_ATTR A, OPB_WIDGET W, OPB_SUBJECT
+        S, OPB_WIDGET_INST I, OPB_MAPPING M
+        WHERE A.WIDGET_ID = W.WIDGET_ID
+        AND W.IS_VISIBLE = 1
+        AND A.VERSION_NUMBER = W.VERSION_NUMBER
+        AND A.WIDGET_TYPE IN(2, 3, 11) --Limit to Src/Tgt/Lkp Transformations
+        AND W.WIDGET_ID = I.WIDGET_ID
+        AND W.VERSION_NUMBER = I.VERSION_NUMBER
+        AND I.MAPPING_ID = M.MAPPING_ID
+        AND I.VERSION_NUMBER = M.VERSION_NUMBER
+        AND W.SUBJECT_ID = S.SUBJ_ID
+        AND UPPER(A.ATTR_VALUE) LIKE '%PARALLEL%';
+
+        --7 MAPPLET
+        --7.1 List Mapplets in all folders
+         select
+        subject_area,mapplet_name from rep_all_mapplets
+        order by 1,2;
+
+        --7.2 List Mapplet
+        parameters and variables
+        select distinct rep_reposit_info.repository_name,
+        rep_all_mapplets.subject_area
+        as folder_name, rep_all_mapplets.mapplet_name
+        as
+        object_name,
+        case when opb_map_parmvar.pv_flag
+        = 2 then 'Mapplet Parameter' else
+        case when opb_map_parmvar.pv_flag
+        = 3 then 'Mapplet Variable' end
+        end as parameter_type, opb_map_parmvar.pv_name as
+        parameter_name,
+        opb_map_parmvar.pv_default
+        as
+        parameter_value,
+        opb_map_parmvar.pv_desc
+        as
+        description
+        from rep_all_mapplets, rep_widget_inst, opb_mapping, opb_map_parmvar,
+        rep_reposit_info
+        where rep_all_mapplets.mapplet_id=opb_mapping.mapping_id
+        and rep_widget_inst.widget_id=opb_mapping.ref_widget_id
+        and opb_mapping.mapping_id=opb_map_parmvar.mapping_id
+        and rep_widget_inst.widget_type=44;
+
+        --8 SESSION
+        --8.1 List session names
+         SELECT   SUBJECT_AREA, TASK_TYPE_NAME, TASK_NAME FROM REP_ALL_TASKS
+           WHERE TASK_TYPE IN (68) 
+                 --AND SUBJECT_AREA= 'ABC'
+        ORDER BY 1, 2, 3;
+
+        --8.2 List save session log count
+        select distinct cc.subject_area,cc.task_name as session_name,bb.attr_value as Savesessionlog
+        from
+        (select  a.session_id,min(a.config_id) as config_id,a.attr_id from  rep_sess_config_parm a
+        where a.attr_id = '103' group by a.session_id,a.attr_id) aa,
+        (select session_id,config_id,attr_value from rep_sess_config_parm
+        where attr_id = '103') bb,
+        (select subject_area,task_name,task_id from rep_all_tasks ) cc
+        where aa.session_id = bb.session_id
+        and aa.config_id=bb.config_id
+        and bb.session_id = cc.task_id
+        and bb.attr_value not in (8,4)
+        order by 1,2,3;
+
+        --8.3 List stop on errors count
+         SELECT DISTINCT
+        A.SUBJECT_AREA,
+        A.TASK_NAME
+        AS
+        SESSION_NAME,
+        B.ATTR_VALUE
+        AS
+        STOPONERRORS
+        FROM
+        REP_ALL_TASKS A ,
+        REP_SESS_CONFIG_PARM  B
+        WHERE
+        A.TASK_ID
+        = B.SESSION_ID
+        AND TASK_TYPE_NAME = 'Session' AND B.ATTR_ID
+        = '202'
+        --AND
+        B.ATTR_VALUE NOT IN (1) --AND A.SUBJECT_AREA in ('ABC')
+        ORDER BY 1,2;
+
+        --8.4 List hard coded paths
+         SELECT DISTINCT A.SUBJECT_AREA,
+				A.TASK_NAME AS SESSION_NAME,
+				B.FILE_NAME,
+				DIR_NAME
+		 FROM REP_ALL_TASKS A ,
+			  OPB_SESS_FILE_VALS B
+		 WHERE A.TASK_TYPE_NAME = 'Session'
+		 AND A.TASK_ID          = B.SESSION_ID --AND A.SUBJECT_AREA IN ('ABC') 
+		 and  DIR_NAME not like '$%'
+		 ORDER BY 1,2; 
+
+        --8.5 List parameter file paths
+        SELECT DISTINCT B.SUBJECT_AREA,B.TASK_NAME  AS SES_WF_NAME,A.ATTR_VALUE AS PRM_FILE_PATH
+		FROM OPB_TASK_ATTR A,REP_ALL_TASKS B
+		WHERE A.ATTR_ID IN (1,4)
+		AND A.TASK_ID = B.TASK_ID
+		AND A.ATTR_VALUE LIKE '%.prm%'
+		ORDER BY 1,2 ASC;
+
+        --8.6  List session log names 
+         SELECT DISTINCT
+			 A.SUBJECT_AREA,
+			 A.WORKFLOW_NAME,
+			 A.SESSION_NAME,
+			 A.SESSION_INSTANCE_NAME,
+			 SUBSTR(A.SESSION_LOG_FILE,25,300) AS
+			 EXISTING_SESSLOGNAME
+			 FROM REP_SESS_LOG A
+			 WHERE SUBSTR(A.SESSION_LOG_FILE,25,300) !=
+			 CONCAT(LOWER(A.SESSION_INSTANCE_NAME),'.log')
+			 ORDER BY 1,2,3
+
+        --8.7  List commit intervals 
+         SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS COMMITINTERVEL
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (14)
+              AND A.ATTR_VALUE <> 10000
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.8 List total source partitions
+         SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS TOTAL_SOURCE_PARTITIONS
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (12)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.9  List total target partitions
+        SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS TOTAL_TARGET_PARTITIONS
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (11)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.10 List DTM Buffer Size 
+        SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS DTM_BUFFER_SIZE
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (101)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.11 List collect performance data
+        SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS COLLECT_PERFORMANCE_DATA
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (102)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+
+
+
+
+
+        		 
+        --2.1 List folder details
+        SELECT SUBJ_NAME,SUBJ_DESC FROM OPB_SUBJECT ORDER BY 1,2
+
+        --2.2 List of shared folders
+         SELECT SUBJ_NAME,SUBJ_DESC FROM OPB_SUBJECT 
+        WHERE IS_SHARED <>0
+        ORDER BY 1,2
+
+        --2.3 List of Users and groups having privileges on Folders
+         SELECT subj.subj_name folder_name, user_group.NAME
+        user_name,
+        DECODE (obj_access.user_type, 1, 'USER', 2, 'GROUP') TYPE,
+        CASE WHEN ((obj_access.permissions
+        - (obj_access.user_id
+        + 1)) IN (8, 16))THEN 'READ'        
+        WHEN ((obj_access.permissions
+        - (obj_access.user_id
+        + 1)) IN (10, 20))THEN 'READ & EXECUTE'
+        WHEN ((obj_access.permissions
+        - (obj_access.user_id
+        + 1)) IN (12, 24))THEN 'READ & WRITE'
+        WHEN ((obj_access.permissions
+        - (obj_access.user_id
+        + 1)) IN (14, 28))THEN 'READ, WRITE & EXECUTE'
+        ELSE 'NO PERMISSIONS'
+        END permissions
+        FROM opb_object_access obj_access,opb_subject
+        subj,opb_user_group user_group
+        WHERE
+        obj_access.object_type = 29
+        AND obj_access.object_id
+        =
+        subj.subj_id
+        AND obj_access.user_id
+        =
+        user_group.ID
+        AND obj_access.user_type
+        =
+        user_group.TYPE
+         --  and
+        user_group.NAME not in ('Admin','READ_ONLY','Administrator','Administrators')
+        order by 1,2,3
+
+
+        --2.4           List of folders Owners
+        select (select repository_name from OPB_REPOSIT_INFO) repo_name,
+        a.SUBJ_NAME,b.NAME
+        from opb_subject a, opb_user_group b
+        where a.owner_id = b.id
+        order by 1,2
+
+        --3 SOURCE
+         --3.1  List of source tables
+         SELECT
+        B.SUBJ_NAME,
+        C.DBDNAM,
+        D.DBTYPE_NAME,
+        A.SOURCE_NAME
+        AS
+        TABLE_NAME,
+        A.FILE_NAME
+        SCHEMA_NAME,
+        A.OWNERNAME
+        FROM
+        OPB_SRC A,OPB_SUBJECT B, OPB_DBD C,OPB_MMD_DBTYPE D
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        AND A.DBDID = C.DBDID
+        AND C.DBTYPE = D.DBTYPE_ID
+        --AND A.SOURCE_NAME
+        <> A.FILE_NAME
+        ORDER BY 1,2,3,4,5
+
+        --3.2 List and count of tables in each folder by db type
+        SELECT
+        B.SUBJ_NAME,
+        D.DBTYPE_NAME,
+        count(*)
+        FROM
+        OPB_SRC A,OPB_SUBJECT B, OPB_DBD C,OPB_MMD_DBTYPE D
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        AND A.DBDID = C.DBDID
+        AND C.DBTYPE = D.DBTYPE_ID
+        --AND A.SOURCE_NAME
+        <> A.FILE_NAME
+        group by B.SUBJ_NAME,D.DBTYPE_NAME
+        order by 1,2,3
+        --3.3 List and count of tables overall used
+        SELECT SOURCE_NAME, COUNT(SOURCE_NAME) FROM
+        REP_TBL_MAPPING
+        GROUP BY SOURCE_NAME
+        ORDER BY 1,2 ASC
+
+        --3.4 List of
+        source tables used in mapping
+        SELECT
+        SUBJECT_AREA,SOURCE_NAME,MAPPING_NAME FROM REP_SRC_MAPPING
+        ORDER BY 1,2,3
+
+        --3.5 List of source tables using as shortcuts
+         SELECT DISTINCT
+        B.SUBJ_NAME,
+        C.DBDNAM,
+        D.DBTYPE_NAME,
+        A.SOURCE_NAME AS TABLE_NAME,
+        A.FILE_NAME SCHEMA_NAME,
+        A.OWNERNAME
+        FROM
+        OPB_SRC A,OPB_SUBJECT B, OPB_DBD C,OPB_MMD_DBTYPE D
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        AND A.DBDID = C.DBDID
+        AND C.DBTYPE = D.DBTYPE_ID
+        --AND A.SOURCE_NAME <> A.FILE_NAME
+        and A.SOURCE_NAME like 'sc_%'
+        ORDER BY 1,2,3,4,5
+
+        --3.6 List Sequence Generator Value
+        SELECT a.attr_value AS current_value, b.WIDGET_NAME AS Transformation_name
+          FROM rep_widget_attr a, REP_ALL_TRANSFORMS b
+         WHERE     a.attr_id = 4
+               AND a.widget_id IN (SELECT widget_id
+                                     FROM REP_ALL_TRANSFORMS
+        WHERE widget_type_name LIKE 'Sequence')
+               AND a.widget_id = b.widget_id
+
+        --3.7 List Source tables, Mapping Names and Source Database Name
+        SELECT REP_ALL_SOURCES.SOURCE_NAME,
+        REP_SRC_MAPPING.MAPPING_NAME,
+        REP_ALL_SOURCES.SOURCE_DATABASE_NAME
+          FROM REP_SRC_MAPPING, REP_ALL_SOURCES
+         WHERE REP_SRC_MAPPING.SOURCE_ID(+) = REP_ALL_SOURCES.SOURCE_ID
+               AND REP_SRC_MAPPING.SOURCE_NAME(+) =
+        REP_ALL_SOURCES.PARENT_SOURCE_NAME
+               AND REP_SRC_MAPPING.SUBJECT_ID(+) = REP_ALL_SOURCES.SUBJECT_ID
+
+        --4  TARGET
+         -- 4.1 List of Target Tables
+         SELECT B.SUBJ_NAME,
+        A.TARGET_NAME,
+        DECODE(A.DBTYPE,
+        0,'VSAM',
+        1,'IMS',
+        2,'Sybase',
+        3,'Oracle',
+        4,'Informix',
+        5,'Microsoft
+        SQL Server',
+        6,'DB2',
+        7,'Flat
+        File',
+        8,'ODBC',
+        9,'SAP
+        BW',
+        10,'PeopleSoft',
+        11,'SAP
+        R/3',
+        12,'XML',
+        13,'MQSeries',
+        14,'Siebel',
+        15,'Teradata' ) as DB_TYPE
+        FROM
+        OPB_TARG A,
+        OPB_SUBJECT B
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        ORDER BY 1,2,3
+
+        --4.2  List and count of tables in each folder by db type
+         SELECT B.SUBJ_NAME,
+        DECODE(A.DBTYPE,
+        0,'VSAM',
+        1,'IMS',
+        2,'Sybase',
+        3,'Oracle',
+        4,'Informix',
+        5,'Microsoft
+        SQL Server',
+        6,'DB2',
+        7,'Flat
+        File',
+        8,'ODBC',
+        9,'SAP
+        BW',
+        10,'PeopleSoft',
+        11,'SAP
+        R/3',
+        12,'XML',
+        13,'MQSeries',
+        14,'Siebel',
+        15,'Teradata' ) as DB_TYPE,
+        count(*)
+        FROM
+        OPB_TARG A,
+        OPB_SUBJECT B
+        WHERE A.SUBJ_ID = B.SUBJ_ID
+        GROUP BY B.SUBJ_NAME,A.DBTYPE
+        ORDER BY 1,2
+
+        --4.3 List and count of table overall used
+        SELECT SOURCE_NAME, COUNT(SOURCE_NAME) FROM
+        REP_TBL_MAPPING
+        GROUP BY SOURCE_NAME
+        ORDER BY 1,2 ASC
+
+        --4.4 List Target table used in session level
+        SELECT SUBJECT_AREA,SESSION_NAME,SESSION_INSTANCE_NAME,WIDGET_NAME AS
+        TARGET_TABLE_NAME,TYPE_NAME AS TARGET_TYPE FROM REP_SESS_TBL_LOG
+        ORDER BY 1,2,3
+
+        --4.5 Truncate target Table Option
+         SELECT DISTINCT
+        C.SUBJ_NAME,A.TASK_NAME
+        SESSION_NAME, DECODE(B.ATTR_VALUE,1,'YES','NO')  TRUNCATE_TARGET_TABLE
+                 FROM  OPB_TASK
+        A
+        ,
+        OPB_EXTN_ATTR
+        B, OPB_SUBJECT
+        C
+        WHERE B.SESSION_ID=A.TASK_ID
+        AND A.SUBJECT_ID
+        =
+        C.SUBJ_ID
+        AND A.TASK_TYPE
+        =
+        68
+        AND B.ATTR_ID=9
+        ORDER
+        BY
+        1,2,3
+
+        --5 TRANSFORMATION
+        --5.1 List of filer transformations
+        SELECT SUBSTR(WIDGET_NAME,1,3), COUNT(WIDGET_NAME)
+        FROM REP_ALL_TRANSFORMS
+        WHERE WIDGET_TYPE_NAME = 'Filter'
+        GROUP BY SUBSTR(WIDGET_NAME,1,3)
+
+        --5.2 List of Sequence transformations
+        SELECT DISTINCT
+        SUBJECT_AREA, PARENT_WIDGET_NAME FROM REP_ALL_TRANSFORMS WHERE WIDGET_TYPE_NAME
+        ='Sequence' ORDER BY 1,2
+
+        --5.3 List of tables used as lookups
+        SELECT DISTINCT
+        B.PARENT_SUBJECT_AREA
+        AS
+        FOLDER_NAME,
+        C.ATTR_VALUE
+        AS
+        TABLE_NAME,A.INSTANCE_NAME AS TRANSFORMATION_NAME, A.WIDGET_TYPE_NAME
+        AS
+        TRANSFORMATION_TYPE,B.MAPPING_NAME
+        FROM
+        REP_WIDGET_INST A INNER JOIN
+        REP_ALL_MAPPINGS B ON A.MAPPING_ID = B.MAPPING_ID INNER JOIN
+        REP_WIDGET_ATTR C ON A.WIDGET_ID
+        = C.WIDGET_ID
+        WHERE
+        C.ATTR_DESCRIPTION
+        LIKE 'Lookup source table'
+        ORDER BY 1,2,3,4,5
+
+        --5.4 List of transformations using sql overrides
+        SELECT DISTINCT
+        d.subject_area
+        AS
+        Folder, d.mapping_name, a.widget_type_name
+        AS
+        Transformation_Type,
+        a.instance_name
+        as
+        Transformation_Name, b.attr_name, b.attr_value, c.session_name 
+        FROM
+        REP_WIDGET_INST a,
+        REP_WIDGET_ATTR b, REP_LOAD_SESSIONS c, REP_ALL_MAPPINGS d
+        WHERE b.widget_id = a. widget_id
+        AND b.widget_type = a.
+        widget_type
+        AND b.widget_type in (3, 11)
+        AND c.mapping_id = a.mapping_id
+        AND d.mapping_id = a.mapping_id
+        AND b.attr_id= 1
+        AND b.attr_datatype=2 and b.attr_type=3
+        ORDER BY d.subject_area, d.mapping_name
+
+
+        --5.5 List all transformations
+         SELECT DISTINCT version_subject.subject_area "FOLDER_NAME",  version_props.object_name "OBJECT_NAME",
+        CASE
+        WHEN version_props.object_type = 1 THEN 'Source Definition'                                ELSE CASE
+        WHEN version_props.object_type = 2 THEN 'Target Definition'                                ELSE CASE
+        WHEN version_props.object_type = 3 THEN 'Source Qualifier'                                  ELSE CASE
+        WHEN version_props.object_type = 4 THEN 'Update Strategy'                                 ELSE CASE
+        WHEN version_props.object_type = 5 THEN 'Expression'                                           ELSE CASE
+        WHEN version_props.object_type = 6 THEN 'Stored Procedure'                                ELSE CASE
+        WHEN version_props.object_type = 7 THEN 'Sequence'                            ELSE CASE
+        WHEN version_props.object_type = 8 THEN 'External Procedure'                             ELSE CASE
+        WHEN version_props.object_type = 9 THEN 'Aggregator'                                          ELSE CASE
+        WHEN version_props.object_type = 10 THEN 'Filter'                                                                 ELSE CASE
+        WHEN version_props.object_type = 11 THEN 'Lookup Procedure'                             ELSE CASE
+        WHEN version_props.object_type = 12 THEN 'Joiner'                                                 ELSE CASE
+        WHEN version_props.object_type = 13 THEN 'Procedure'                           ELSE CASE
+        WHEN version_props.object_type = 14 THEN 'Normalizer'                         ELSE CASE
+        WHEN version_props.object_type = 16 THEN 'Merger'                                               ELSE CASE
+        WHEN version_props.object_type = 17 THEN 'Pivot'                                   ELSE CASE
+        WHEN version_props.object_type = 18 THEN 'Session Obsolete'                              ELSE CASE
+        WHEN version_props.object_type = 19 THEN 'Batch'                                                  ELSE CASE
+        WHEN version_props.object_type = 20 THEN 'Shortcut'                             ELSE CASE
+        WHEN version_props.object_type = 21 THEN 'Mapping'                             ELSE CASE
+        WHEN version_props.object_type = 26 THEN 'Rank'                                   ELSE CASE
+        WHEN version_props.object_type = 27 THEN 'Star Schema'                      ELSE CASE
+        WHEN version_props.object_type = 28 THEN 'Folder Version'                   ELSE CASE
+        WHEN version_props.object_type = 29 THEN 'Folder'                                                 ELSE CASE
+        WHEN version_props.object_type = 30 THEN 'Cube'                                   ELSE CASE
+        WHEN version_props.object_type = 31 THEN 'Dimension'                          ELSE CASE
+        WHEN version_props.object_type = 32 THEN 'Level'                                   ELSE CASE
+        WHEN version_props.object_type = 33 THEN 'Hierarchy'                           ELSE CASE
+        WHEN version_props.object_type = 34 THEN 'Fact Table'                          ELSE CASE
+        WHEN version_props.object_type = 35 THEN 'General Object'                                 ELSE CASE
+        WHEN version_props.object_type = 36 THEN 'FTP Object'                         ELSE CASE
+        WHEN version_props.object_type = 37 THEN 'Oracle External Loader Object'          ELSE CASE
+        WHEN version_props.object_type = 38 THEN 'Informix External Loader Object'                       ELSE CASE
+        WHEN version_props.object_type = 39 THEN 'Sybase IQ External Loader Object'     ELSE CASE
+        WHEN version_props.object_type = 54 THEN 'Sybase IQ 12 External Loader Object'                ELSE CASE
+        WHEN version_props.object_type = 53 THEN 'Tera Data External Loader Object'     ELSE CASE
+        WHEN version_props.object_type = 40 THEN 'File Object'                         ELSE CASE
+        WHEN version_props.object_type = 41 THEN 'Server Object'                    ELSE CASE
+        WHEN version_props.object_type = 42 THEN 'Database Object'                               ELSE CASE
+        WHEN version_props.object_type = 43 THEN 'Repository'                          ELSE CASE
+        WHEN version_props.object_type = 44 THEN 'Mapplet'                             ELSE CASE
+        WHEN version_props.object_type = 45 THEN 'Application Source Qualifier'             ELSE CASE
+        WHEN version_props.object_type = 46 THEN 'Input Transformation'                       ELSE CASE
+        WHEN version_props.object_type = 47 THEN 'Output Transformation'                    ELSE CASE
+        WHEN version_props.object_type = 50 THEN 'Advanced External Procedure'           ELSE CASE
+        WHEN version_props.object_type = 48 THEN 'Business Component Framework'    ELSE CASE
+        WHEN version_props.object_type = 49 THEN 'Business Component'                        ELSE CASE
+        WHEN version_props.object_type = 51 THEN 'SAP Structure'                    ELSE CASE
+        WHEN version_props.object_type = 52 THEN 'SAP Function'                     ELSE CASE
+        WHEN version_props.object_type = 15 THEN 'Router'                                               ELSE CASE
+        WHEN version_props.object_type = 55 THEN 'XML Source Qualifier'                        ELSE CASE
+        WHEN version_props.object_type = 56 THEN 'MQ Source Qualifier'                         ELSE CASE
+        WHEN version_props.object_type = 57 THEN 'MQ Connection Object'                     ELSE CASE
+        WHEN version_props.object_type = 58 THEN 'Command'                         ELSE CASE
+        WHEN version_props.object_type = 59 THEN 'Decision'                            ELSE CASE
+        WHEN version_props.object_type = 60 THEN 'Event Wait'                        ELSE CASE
+        WHEN version_props.object_type = 61 THEN 'Event Raise'                       ELSE CASE
+        WHEN version_props.object_type = 62 THEN 'Start'                                  ELSE CASE
+        WHEN version_props.object_type = 63 THEN 'Abort'                                                 ELSE CASE
+        WHEN version_props.object_type = 64 THEN 'Stop'                                   ELSE CASE
+        WHEN version_props.object_type = 65 THEN 'Email'                                                 ELSE CASE
+        WHEN version_props.object_type = 66 THEN 'Timer'                                                ELSE CASE
+        WHEN version_props.object_type = 67 THEN 'Assignment'                       ELSE CASE
+        WHEN version_props.object_type = 68 THEN 'Session'                                              ELSE CASE
+        WHEN version_props.object_type = 69 THEN 'Scheduler'                          ELSE CASE
+        WHEN version_props.object_type = 70 THEN 'Worklet'                             ELSE CASE
+        WHEN version_props.object_type = 71 THEN 'Workflow'                          ELSE CASE
+        WHEN version_props.object_type = 72 THEN 'SessionConfig'                   ELSE CASE
+        WHEN version_props.object_type = 73 THEN 'Relational'                         ELSE CASE
+        WHEN version_props.object_type = 74 THEN 'Application'                        ELSE CASE
+        WHEN version_props.object_type = 75 THEN 'FTP'                                    ELSE CASE
+        WHEN version_props.object_type = 76 THEN 'External Loader'                                 ELSE CASE
+        WHEN version_props.object_type = 77 THEN 'Queue'                                               ELSE CASE
+        WHEN version_props.object_type = 78 THEN 'Reader'                                              ELSE CASE
+        WHEN version_props.object_type = 79 THEN 'Writer'                                               ELSE CASE
+        WHEN version_props.object_type = 80 THEN 'Sorter'                                                ELSE CASE
+        WHEN version_props.object_type = 81 THEN 'Vendor'                                              ELSE CASE
+        WHEN version_props.object_type = 84 THEN 'App Multi-Group Source Qualifier'   ELSE CASE
+        WHEN version_props.object_type = 91 THEN 'Control'                                              ELSE CASE
+        WHEN version_props.object_type = 92 THEN 'Transaction Control'                          ELSE CASE
+        WHEN version_props.object_type = 97 THEN 'Custom Transformation'                   ELSE CASE
+        WHEN version_props.object_type = 93 THEN 'Query'                                                ELSE CASE
+        WHEN version_props.object_type = 94 THEN 'Deployment Group'                           ELSE CASE
+        WHEN version_props.object_type = 95 THEN 'Label'                                                 ELSE CASE
+        WHEN version_props.object_type = 96 THEN 'Deployed Deployment Group'           ELSE CASE
+        WHEN version_props.object_type = 98 THEN 'Server Grid'                        ELSE CASE
+        WHEN version_props.object_type = 99 THEN 'Profiling Ruleset'                               ELSE CASE
+        WHEN version_props.object_type = 100 THEN 'Template Extension'                        ELSE CASE
+        WHEN version_props.object_type = 101 THEN 'Global Profile Resource'                  ELSE CASE
+        WHEN version_props.object_type = 102 THEN 'Web Services Hub'                          ELSE CASE
+        WHEN version_props.object_type = 103 THEN 'Lookup Extension'                            ELSE CASE
+        WHEN version_props.object_type = 105 THEN 'Service Level'                   ELSE CASE
+        WHEN version_props.object_type = 106 THEN 'User Defined Function' ELSE 'Shortcut'
+           END            END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END         END         END         END         END         END         END      END         END         END         END         END         END         END         END
+        END "OBJECT_TYPE"
+        FROM rep_users version_users,
+        rep_version_props version_props,
+        rep_reposit_info version_reposit_info,
+        rep_subject version_subject
+        WHERE (version_props.user_id = version_users.user_id
+        AND version_props.object_id <> version_reposit_info.repository_id
+        AND version_props.subject_id = version_subject.subject_id
+        )
+        ORDER BY 3, 1;
+
+        --5.6 List all Expression transformations using CONCATNATION function
+        SELECT DISTINCT REP_ALL_MAPPINGS.SUBJECT_AREA,
+        REP_ALL_MAPPINGS.MAPPING_NAME,                REP_WIDGET_INST.WIDGET_TYPE_NAME
+        AS
+        TRANSFORMATION_TYPE,               
+        REP_WIDGET_INST.INSTANCE_NAME AS TRANSFORMATION_NAME,                REP_WIDGET_FIELD.FIELD_NAME
+        AS
+        PORT_NAME,
+        CASE
+          WHEN REP_WIDGET_FIELD.PORTTYPE
+        = 1 THEN 'I'
+          WHEN REP_WIDGET_FIELD.PORTTYPE
+        = 2 THEN 'O'
+          WHEN REP_WIDGET_FIELD.PORTTYPE
+        = 3 THEN 'IO'
+          WHEN REP_WIDGET_FIELD.PORTTYPE
+        = 32 THEN 'V'
+        END AS PORT_TYPE,
+        REP_WIDGET_FIELD.EXPRESSION
+        FROM REP_WIDGET_INST, REP_WIDGET_FIELD,
+        REP_ALL_MAPPINGS
+        WHERE REP_WIDGET_INST.WIDGET_ID =
+        REP_WIDGET_FIELD.WIDGET_ID
+        AND REP_WIDGET_INST.MAPPING_ID =
+        REP_ALL_MAPPINGS.MAPPING_ID
+        AND REP_WIDGET_INST.WIDGET_TYPE = 5
+        AND REP_WIDGET_FIELD.EXPRESSION LIKE '%CONCAT%'
+        ORDER BY 1;
+
+        --5.7 List of all port details of an Expression transformations
+        SELECT S.SUBJ_NAME, W.WIDGET_NAME, F.FIELD_ID,F.FIELD_NAME,E.VERSION_NUMBER, E.EXPRESSION FROM OPB_WIDGET W, OPB_SUBJECT S, OPB_WIDGET_FIELD F, OPB_WIDGET_EXPR R, OPB_EXPRESSION E
+        WHERE W.SUBJECT_ID=S.SUBJ_ID AND W.WIDGET_ID=F.WIDGET_ID
+        AND W.WIDGET_ID=R.WIDGET_ID AND F.FIELD_ID=R.OUTPUT_FIELD_ID
+        AND W.WIDGET_ID=E.WIDGET_ID AND R.EXPR_ID=E.EXPR_ID
+        AND W.VERSION_NUMBER = F.VERSION_NUMBER
+        AND F.VERSION_NUMBER = R.VERSION_NUMBER
+        AND R.VERSION_NUMBER = E.VERSION_NUMBER
+        AND W.IS_VISIBLE = 1
+        AND W.WIDGET_NAME LIKE 'EXP_%'
+        ORDER BY 1,2,3;
+
+        --5.8  List of all Expression transformation port links
+         SELECT DISTINCT S.SUBJ_NAME, WF.INSTANCE_NAME ||'.'|| F.FIELD_NAME
+        FROM_NAME, F.FIELD_ORDER
+        AS
+        EXP_PORT_ORDER,
+        WT.INSTANCE_NAME
+        ||'.'|| T.FIELD_NAME TO_NAME,  T.FIELD_ORDER
+        FROM OPB_WIDGET Z, OPB_WIDGET_INST WF, OPB_WIDGET_INST WT,
+        OPB_WIDGET_FIELD F, OPB_WIDGET_FIELD T, OPB_WIDGET_DEP D, OPB_SUBJECT S
+        WHERE Z.SUBJECT_ID = S.SUBJ_ID
+        AND Z.IS_VISIBLE = 1
+        AND Z.WIDGET_ID = F.WIDGET_ID
+        AND Z.WIDGET_ID = WF.WIDGET_ID
+        AND Z.RU_VERSION_NUMBER = WF.VERSION_NUMBER
+        AND WF.REF_VERSION_NUMBER = F.VERSION_NUMBER
+        AND WF.VERSION_NUMBER = D.VERSION_NUMBER
+        AND WF.MAPPING_ID = D.MAPPING_ID
+        AND WF.INSTANCE_ID = D.FROM_INSTANCE_ID
+        AND F.FIELD_ID = D.FROM_FIELD_ID
+        AND D.TO_INSTANCE_ID = WT.INSTANCE_ID
+        AND D.TO_FIELD_ID = T.FIELD_ID
+        AND D.MAPPING_ID = WT.MAPPING_ID
+        AND D.VERSION_NUMBER = WT.VERSION_NUMBER
+        AND WT.WIDGET_ID = T.WIDGET_ID
+        AND WT.REF_VERSION_NUMBER = T.VERSION_NUMBER
+        --AND Z.WIDGET_NAME LIKE
+        'EXP_%'
+        AND S.SUBJ_NAME = :FOLDER_NAME
+        AND WF.INSTANCE_NAME = :EXP_NAME
+        ORDER BY 1,2,3;
+
+        --5.9 List of LKP
+        transformation port links used in all mappings
+        SELECT DISTINCT OPB_SUBJECT.SUBJ_NAME,OPB_MAPPING.MAPPING_NAME,
+        OPB_WIDGET_FIELD.FIELD_NAME FIELD_NAME,
+        OPB_EXPRESSION.EXPRESSION EXPRESSION
+        FROM OPB_WIDGET_EXPR, OPB_EXPRESSION, OPB_WIDGET_FIELD, REP_FLD_DATATYPE, OPB_WIDGET, OPB_SUBJECT,OPB_WIDGET_INST,OPB_MAPPING
+        WHERE
+        OPB_WIDGET_FIELD.WIDGET_ID = OPB_WIDGET.WIDGET_ID
+        AND OPB_WIDGET.SUBJECT_ID
+        = OPB_SUBJECT.SUBJ_ID
+        AND OPB_WIDGET_INST.WIDGET_ID = OPB_WIDGET.WIDGET_ID
+        AND OPB_MAPPING.MAPPING_ID
+        = OPB_WIDGET_INST.MAPPING_ID
+        AND OPB_WIDGET_FIELD.VERSION_NUMBER = OPB_WIDGET.VERSION_NUMBER
+        AND OPB_WIDGET.IS_VISIBLE
+        = 1
+        AND OPB_WIDGET_FIELD.WIDGET_ID= OPB_WIDGET_EXPR.WIDGET_ID
+        AND OPB_WIDGET_FIELD.FIELD_ID= OPB_WIDGET_EXPR.OUTPUT_FIELD_ID
+        AND OPB_WIDGET_EXPR.WIDGET_ID=OPB_EXPRESSION.WIDGET_ID
+        AND OPB_WIDGET_EXPR.EXPR_ID=OPB_EXPRESSION.EXPR_ID
+        AND OPB_EXPRESSION.LINE_NO = 1
+        AND OPB_WIDGET_EXPR.VERSION_NUMBER = OPB_EXPRESSION.VERSION_NUMBER
+        AND OPB_WIDGET_EXPR.VERSION_NUMBER = OPB_WIDGET_FIELD.VERSION_NUMBER
+        --AND OPB_SUBJECT.SUBJ_NAME =
+        'FOLDER_NAME'
+        --AND OPB_MAPPING.MAPPING_NAME =
+        'MAPPING_NAME'
+        AND UPPER(EXPRESSION) LIKE '%LKP_ACCT_B%'
+        ORDER BY 1,2;
+
+        --5.10  Identify ports in EXP (I, IO, O,V Ports)
+        SELECT rep_all_mappings.subject_area, rep_all_mappings.mapping_name,
+        rep_widget_inst.widget_type_name AS transformation_type,
+        rep_widget_inst.instance_name AS transformation_name, rep_widget_field.field_name
+        AS port_name,
+        CASE WHEN rep_widget_field.porttype=1 THEN 'I'
+        WHEN rep_widget_field.porttype=2 THEN 'O'
+        WHEN rep_widget_field.porttype=3 THEN 'IO'
+        WHEN rep_widget_field.porttype=32 THEN 'V'
+        END AS port_type,
+        rep_widget_field.expression
+        FROM rep_widget_inst, rep_widget_field, rep_all_mappings
+        WHERE rep_widget_inst.widget_id=rep_widget_field.widget_id
+        AND rep_widget_inst.mapping_id=rep_all_mappings.mapping_id
+        AND rep_widget_inst.widget_type IN (5,9);
+
+        --5.11    SQ and Lookup SQL
+         SELECT DISTINCT
+        C.SUBJECT_AREA,
+        C.MAPPING_NAME,C.MAPPING_ID,
+        B.WIDGET_TYPE_NAME AS TRANSFORMATION_TYPE,
+        B.INSTANCE_NAME AS TRANSFORMATION_NAME,
+        X.SQL_SQUERY
+        FROM
+        (SELECT A.ATTR_NAME,A.ATTR_VALUE AS SQL_SQUERY,A.WIDGET_ID,A.MAPPING_ID FROM REP_WIDGET_ATTR A
+        WHERE WIDGET_TYPE IN (3,11) -- USE
+        3 FOR SOURCE QUALIFIER AND 11 FOR LOOKUP PROCEDURE
+        AND A.ATTR_ID= 1
+        AND A.ATTR_VALUE IS NOT NULL) X,
+        REP_WIDGET_INST B,
+        REP_ALL_MAPPINGS C
+        WHERE
+        X.WIDGET_ID = B. WIDGET_ID
+        AND X.MAPPING_ID = C.MAPPING_ID
+        ORDER BY 1,2,3
+
+        --5.12      B2B Transformation List
+        with b2b_widgets as (
+          select widget_id from opb_widget_attr where attr_value='pmudtsrv'
+        )
+        select
+          F.SERVER_NAME as Server_name,
+          F.SUBJECT_AREA as Folder_name,
+          F.WORKFLOW_NAME as workflow_name,
+          E.INSTANCE_NAME as session_name,
+          C.MAPPING_NAME,
+          B.instance_name as trans_name
+        from
+          b2b_widgets A
+          inner join opb_widget_inst B
+            on A.widget_id = B.widget_id
+          inner join opb_mapping C
+            on B.mapping_id = C.Mapping_id
+          inner join opb_session D
+            on B.mapping_id = D.mapping_id
+          inner join REP_TASK_INST E
+            on D.session_id = E.task_id
+          inner join REP_WORKFLOWS F
+            on E.workflow_id = F.workflow_id;
+
+        --6   MAPPING
+        --6.1 List mapping names
+         SELECT   SUBJECT_AREA, PARENT_MAPPING_NAME
+            FROM REP_ALL_MAPPINGS
+        ORDER BY 1, 2;
+
+        --6.2 List total count of mappings
+         SELECT   SUBJECT_AREA, COUNT(PARENT_MAPPING_NAME) AS TOTAL_MAPPINGS
+            FROM REP_ALL_MAPPINGS
+              GROUP BY SUBJECT_AREA
+         ORDER BY 1, 2;
+        --6.3 List last saved user for a mapping
+         SELECT REP_SUBJECT.SUBJECT_AREA "FOLDER",REP_VERSION_PROPS.OBJECT_NAME
+        "MAPPING", REP_USERS.USER_NAME,REP_VERSION_PROPS.LAST_SAVED
+        FROM REP_USERS,REP_VERSION_PROPS,REP_SUBJECT
+        WHERE REP_USERS.USER_ID=REP_VERSION_PROPS.USER_ID
+         AND REP_VERSION_PROPS.OBJECT_TYPE
+        IN (21)
+         --AND REP_SUBJECT.SUBJECT_AREA
+        = 'FOLDER_NAME'
+         AND REP_SUBJECT.SUBJECT_ID
+        =
+        REP_VERSION_PROPS.SUBJECT_ID
+        ORDER BY 1,2,3,4;
+
+        --6.4 List Mapping parameters and variables
+        select distinct rep_reposit_info.repository_name,
+        rep_all_mappings.subject_area
+        as folder_name, rep_all_mappings.mapping_name
+        as
+        object_name,
+        case when opb_map_parmvar.pv_flag
+        = 2 then 'Mapping
+        Parameter' else
+        case when opb_map_parmvar.pv_flag
+        = 3 then 'Mapping
+        Variable' end
+        end as parameter_type, opb_map_parmvar.pv_name as
+        parameter_name,
+        opb_map_parmvar.pv_default
+        as
+        parameter_value,
+        opb_map_parmvar.pv_desc
+        as
+        description
+        from rep_all_mappings, opb_map_parmvar, rep_reposit_info
+        where rep_all_mappings.mapping_id = opb_map_parmvar.mapping_id;
+
+        --6.5 List all the mappings using PARALLEL hints
+        SELECT S.SUBJ_NAME, M.MAPPING_NAME, W.WIDGET_NAME, A.WIDGET_ID, W.VERSION_NUMBER,
+        SUBSTR(A.ATTR_VALUE, 1, 60)
+        ATTR_VALUE
+        FROM OPB_WIDGET_ATTR A, OPB_WIDGET W, OPB_SUBJECT
+        S, OPB_WIDGET_INST I, OPB_MAPPING M
+        WHERE A.WIDGET_ID = W.WIDGET_ID
+        AND W.IS_VISIBLE = 1
+        AND A.VERSION_NUMBER = W.VERSION_NUMBER
+        AND A.WIDGET_TYPE IN(2, 3, 11) --Limit to Src/Tgt/Lkp Transformations
+        AND W.WIDGET_ID = I.WIDGET_ID
+        AND W.VERSION_NUMBER = I.VERSION_NUMBER
+        AND I.MAPPING_ID = M.MAPPING_ID
+        AND I.VERSION_NUMBER = M.VERSION_NUMBER
+        AND W.SUBJECT_ID = S.SUBJ_ID
+        AND UPPER(A.ATTR_VALUE) LIKE '%PARALLEL%';
+
+        --7 MAPPLET
+        --7.1 List Mapplets in all folders
+         select
+        subject_area,mapplet_name from rep_all_mapplets
+        order by 1,2;
+
+        --7.2 List Mapplet
+        parameters and variables
+        select distinct rep_reposit_info.repository_name,
+        rep_all_mapplets.subject_area
+        as folder_name, rep_all_mapplets.mapplet_name
+        as
+        object_name,
+        case when opb_map_parmvar.pv_flag
+        = 2 then 'Mapplet Parameter' else
+        case when opb_map_parmvar.pv_flag
+        = 3 then 'Mapplet Variable' end
+        end as parameter_type, opb_map_parmvar.pv_name as
+        parameter_name,
+        opb_map_parmvar.pv_default
+        as
+        parameter_value,
+        opb_map_parmvar.pv_desc
+        as
+        description
+        from rep_all_mapplets, rep_widget_inst, opb_mapping, opb_map_parmvar,
+        rep_reposit_info
+        where rep_all_mapplets.mapplet_id=opb_mapping.mapping_id
+        and rep_widget_inst.widget_id=opb_mapping.ref_widget_id
+        and opb_mapping.mapping_id=opb_map_parmvar.mapping_id
+        and rep_widget_inst.widget_type=44;
+
+        --8 SESSION
+        --8.1 List session names
+         SELECT   SUBJECT_AREA, TASK_TYPE_NAME, TASK_NAME FROM REP_ALL_TASKS
+           WHERE TASK_TYPE IN (68) 
+                 --AND SUBJECT_AREA= 'ABC'
+        ORDER BY 1, 2, 3;
+
+        --8.2 List save session log count
+        select distinct cc.subject_area,cc.task_name as session_name,bb.attr_value as Savesessionlog
+        from
+        (select  a.session_id,min(a.config_id) as config_id,a.attr_id from  rep_sess_config_parm a
+        where a.attr_id = '103' group by a.session_id,a.attr_id) aa,
+        (select session_id,config_id,attr_value from rep_sess_config_parm
+        where attr_id = '103') bb,
+        (select subject_area,task_name,task_id from rep_all_tasks ) cc
+        where aa.session_id = bb.session_id
+        and aa.config_id=bb.config_id
+        and bb.session_id = cc.task_id
+        and bb.attr_value not in (8,4)
+        order by 1,2,3;
+
+        --8.3 List stop on errors count
+         SELECT DISTINCT
+        A.SUBJECT_AREA,
+        A.TASK_NAME
+        AS
+        SESSION_NAME,
+        B.ATTR_VALUE
+        AS
+        STOPONERRORS
+        FROM
+        REP_ALL_TASKS A ,
+        REP_SESS_CONFIG_PARM  B
+        WHERE
+        A.TASK_ID
+        = B.SESSION_ID
+        AND TASK_TYPE_NAME = 'Session' AND B.ATTR_ID
+        = '202'
+        --AND
+        B.ATTR_VALUE NOT IN (1) --AND A.SUBJECT_AREA in ('ABC')
+        ORDER BY 1,2;
+
+        --8.4 List hard coded paths
+        SELECT DISTINCT
+        A.SUBJECT_AREA,
+        A.TASK_NAME
+        AS
+        SESSION_NAME,
+        B.FILE_NAME,
+        DIR_NAME
+        FROM
+        REP_ALL_TASKS A , 
+        OPB_SESS_FILE_VALS B
+        WHERE   
+              A.TASK_TYPE_NAME = 'Session'
+              AND A.TASK_ID
+        = B.SESSION_ID
+              --AND A.SUBJECT_AREA IN ('ABC')
+        ORDER BY 1,2;
+
+        --8.5 List parameter file paths
+        SELECT DISTINCT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SES_WF_NAME,
+              A.ATTR_VALUE AS PRM_FILE_PATH
+        FROM
+               OPB_TASK_ATTR A,
+               REP_ALL_TASKS B
+        WHERE
+                A.ATTR_ID
+        IN (1,4)
+                AND A.TASK_ID
+        = B.TASK_ID
+                AND A.ATTR_VALUE
+        LIKE '%.prm%'
+        ORDER BY 1,2 ASC;
+
+        --8.6  List session
+        log names 
+         SELECT DISTINCT
+              A.SUBJECT_AREA,
+              A.WORKFLOW_NAME,
+              A.SESSION_NAME,
+              A.SESSION_INSTANCE_NAME,
+              SUBSTR(A.SESSION_LOG_FILE,25,300) AS
+        EXISTING_SESSLOGNAME
+        FROM
+               REP_SESS_LOG A
+        WHERE
+                SUBSTR(A.SESSION_LOG_FILE,25,300) !=
+        CONCAT(LOWER(A.SESSION_INSTANCE_NAME),'.log')
+              ORDER BY 1,2,3;
+
+        --8.7  List commit intervals 
+         SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS COMMITINTERVEL
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (14)
+              AND A.ATTR_VALUE <> 10000
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.8 List total source partitions
+         SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS TOTAL_SOURCE_PARTITIONS
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (12)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.9  List total target partitions
+        SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS TOTAL_TARGET_PARTITIONS
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (11)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.10 List DTM Buffer Size 
+        SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS DTM_BUFFER_SIZE
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (101)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.11 List collect performance data
+        SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS COLLECT_PERFORMANCE_DATA
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (102)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC
+          
+        --8.12 List Incremental Aggregation
+         SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS INCREMENTAL_AGGREGATION
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (103)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC
+          
+        --8.13          List Reinitialize aggregate cache
+
+        SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS REINITIALIZE_AGGREGATE
+        CACHE
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (104)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+
+        --8.14          List Enable high precision
+        SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS ENABLE_HIGH_PRECISION
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (105)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+
+        --8.15          List Session retry on deadlock
+         SELECT
+              B.SUBJECT_AREA,
+              B.TASK_NAME AS SESS_NAME,
+              A.ATTR_VALUE AS SESSION_ RETRYON_DEADLOCK
+        FROM
+              OPB_TASK_ATTR A ,
+              REP_ALL_TASKS B
+        WHERE
+              A.ATTR_ID IN (106)
+              AND A.TASK_ID = B.TASK_ID
+              AND TASK_TYPE_NAME IN ('Session')
+        ORDER BY 1,2 ASC;
+
+        --8.16  List write	backward compatible check
+         SELECT DISTINCT
+              A.SUBJECT_AREA,A.TASK_NAME,
+              DECODE (B.ATTR_VALUE,0,'TO BE CHECKED',1,'CHECKED')
+        WRITEBACKWARDCOMPATIBLE
+        FROM
+              REP_ALL_TASKS A ,
+              OPB_TASK_ATTR B
+        WHERE
+              A.TASK_ID = B.TASK_ID
+              AND B.TASK_TYPE IN 68
+              AND B.ATTR_ID = 17
+              --AND B.ATTR_VALUE<> 1
+        ORDER BY 1,2,3;
+
+        --8.17          List over	ride tracing
+         SELECT REP_REPOSIT_INFO.REPOSITORY_NAME,
+               REP_ALL_TASKS.SUBJECT_AREA AS FOLDER_NAME,
+               REP_ALL_TASKS.TASK_NAME AS SESSION_NAME,
+               CASE
+                  WHEN REP_SESS_CONFIG_PARM.ATTR_VALUE = 0 THEN 'NONE'
+                  WHEN REP_SESS_CONFIG_PARM.ATTR_VALUE = 1 THEN 'TERSE'
+                  WHEN REP_SESS_CONFIG_PARM.ATTR_VALUE = 2 THEN 'NORMAL'
+               WHEN REP_SESS_CONFIG_PARM.ATTR_VALUE = 3 THEN 'VERBOSE INITIALIZATION'
+                  WHEN REP_SESS_CONFIG_PARM.ATTR_VALUE = 4 THEN 'VERBOSE DATA'
+               END AS OVERRIDE_TRACING
+          FROM
+              REP_REPOSIT_INFO,
+            REP_ALL_TASKS,
+            REP_SESS_CONFIG_PARM
+         WHERE
+             REP_ALL_TASKS.TASK_ID = REP_SESS_CONFIG_PARM.SESSION_ID
+             AND REP_SESS_CONFIG_PARM.ATTR_ID = 204
+             --AND
+        REP_SESS_CONFIG_PARM.ATTR_VALUE NOT IN (0,2)
+        ORDER BY 1,2,3;
+
+        --8.18  List save	session log by
+        SELECT  A.SUBJECT_AREA,
+                             A.TASK_NAME AS SESSION_NAME,
+                             B.ATTR_NAME,
+                            DECODE(B.ATTR_VALUE,1,'TIME STAMP','BY RUNS') AS SAVE_SESSION_LOG_BY
+        FROM
+            REP_ALL_TASKS A ,
+            REP_SESS_CONFIG_PARM  B
+        WHERE
+           A.TASK_ID = B.SESSION_ID
+           AND TASK_TYPE_NAME = 'Session'
+          AND B.ATTR_ID IN ('102')
+          --AND B.ATTR_VALUE<> 0
+        ORDER BY 1,2;
+
+        --8.19       List load	type
+         SELECT DISTINCT
+              REP_LOAD_SESSIONS.SUBJECT_AREA AS FOLDER, REP_LOAD_SESSIONS.SESSION_NAME,
+             --REP_SESS_WIDGET_CNXS.CNX_NAME
+        AS CONNECTION_NAME,
+             CASE WHEN OPB_EXTN_ATTR.ATTR_VALUE ='0' THEN 'NORMAL'
+                       WHEN OPB_EXTN_ATTR.ATTR_VALUE ='1' THEN 'BULK'
+             END AS TARGET_LOAD_TYPE
+        FROM
+             REP_LOAD_SESSIONS,
+             REP_SESS_WIDGET_CNXS,
+             OPB_EXTN_ATTR
+        WHERE REP_LOAD_SESSIONS.SESSION_ID=REP_SESS_WIDGET_CNXS.SESSION_ID
+             AND REP_LOAD_SESSIONS.SESSION_ID=OPB_EXTN_ATTR.SESSION_ID
+             AND OPB_EXTN_ATTR.ATTR_ID=3
+             AND OPB_EXTN_ATTR.ATTR_VALUE BETWEEN '0' AND '1'
+             AND REP_SESS_WIDGET_CNXS.READER_WRITER_TYPE='Relational Writer'
+             --AND
+        OPB_EXTN_ATTR.ATTR_VALUE ='1'
+        ORDER BY 1,2;
+
+        --8.20       List 'post_session_success_command' in session
+         SELECT DISTINCT C.SUBJ_NAME AS FOLDER ,A.TASK_NAME AS TASK, B.PM_VALUE AS COMMAND
+        FROM OPB_TASK A,OPB_TASK_VAL_LIST B, OPB_SUBJECT C
+        WHERE A.TASK_TYPE=58 AND A.TASK_NAME='post_session_success_command'
+        AND B.TASK_ID=A.TASK_ID AND B.SUBJECT_ID=C.SUBJ_ID
+        ORDER BY 1;
+
+        --8.21       List of all the emails with attachment
+         SELECT DISTINCT
+        D.SUBJ_NAME
+        AS
+        FOLDER_NAME, C.WORKFLOW_NAME AS WORKFLOW_NAME,A.TASK_NAME
+        AS
+        TASK_NAME, B.ATTR_VALUE AS VALUE
+        FROM
+        OPB_TASK A, OPB_TASK_ATTR B, REP_TASK_INST_RUN C, OPB_SUBJECT D
+        WHERE A.TASK_ID = B.TASK_ID
+        AND A.TASK_TYPE = B.TASK_TYPE
+        AND C.SUBJECT_ID = A.SUBJECT_ID
+        AND A.SUBJECT_ID = D.SUBJ_ID
+        AND A.TASK_TYPE = 65
+        AND B.ATTR_ID IN (2,3)
+        AND(B.ATTR_VALUE LIKE '%\%a%' ESCAPE '\' OR B.ATTR_VALUE LIKE '%\%g%' ESCAPE '\');
+
+        --8.22       Invalid Sessions and Workflows
+         select opb_subject.subj_name,
+        opb_task.task_name
+        from  opb_task,   opb_subject
+        where task_type in (68,71)
+        and is_valid = 0
+        and opb_subject.subj_id =
+        opb_task.subject_id
+        order by 1,2
+        SELECT SUBJECT_AREA AS FOLDER_NAME,
+        DECODE(IS_REUSABLE,1,'Reusable',' ') || ' '||TASK_TYPE_NAME AS TASK_TYPE,
+        TASK_NAME AS
+        OBJECT_NAME,
+        DECODE(IS_VALID,0,'INVALID OBJECT','VALID OBJECT') STATUS,LAST_SAVED
+        FROM REP_ALL_TASKS
+        WHERE IS_VALID=0
+        AND IS_ENABLED=1
+        --AND CHECKOUT_USER_ID =
+        0 -- Comment out for V6
+        --AND is_visible=1 --
+        Comment out for V6
+        ORDER BY 1,2;
+
+        --8.23 List of session run history &#8211; Long running sessions
+        SELECT   subject_area, workflow_name, instance_name,
+                 TO_CHAR (start_time, 'Dy MM/DD/YYYY HH:MI:SS AM') start_time,
+                 TO_CHAR (end_time, 'Dy MM/DD/YYYY HH:MI:SS AM') end_time,
+                 ROUND (((end_time - start_time) * 24) * 60) elapsed
+            FROM rep_task_inst_run
+           WHERE task_type = 68
+             AND start_time > TO_DATE ('01/01/2012', 'mm/dd/yyyy')
+        --     AND subject_area = 'ABC' AND workflow_name='wfc_dly'
+        ORDER BY 1, 2;
+
+        --8.24 List Bad file dir name of a session
+        SELECT subject_area,session_name,session_instance_name,bad_file_location FROM REP_SESS_TBL_LOG
+        --where bad_file_location not like '$PMBadFileDir\%'
+          order by 1,2,3;
+
+        --8.25 List Throughput of the session
+        SELECT subject_area,session_name,session_instance_name,start_time,end_time,throughput FROM REP_SESS_TBL_LOG
+        where throughput > 600
+                            order by 1,2,3;
+
+        --8.26 list the current memory settings (buffer block size, etc.)
+        SELECT a.SUBJECT_AREA AS Folder_Name, a.task_name AS Session_Name, b.ATTR_VALUE AS DTM_BUFFER_SIZE, c.ATTR_VALUE AS Buffer_Block_Size,
+        d.ATTR_VALUE AS Line_Sequential_Buffer_Length
+        FROM REP_ALL_TASKS a, REP_TASK_ATTR b, REP_SESS_CONFIG_PARM c, REP_SESS_CONFIG_PARM d
+        WHERE a.TASK_ID = b.TASK_ID
+        AND a.TASK_ID = c.SESSION_ID
+        AND a.TASK_ID = d.SESSION_ID
+        AND b.ATTR_ID = 101
+        AND c.ATTR_ID = 5
+        AND d.ATTR_ID = 6
+        and a.SUBJECT_AREA like '%subject_area%'
+        ORDER BY 1, 2;
+
+        --8.27 Pushdown Optimization
+        Select T.*,SUBJECT_AREA B,WORKFLOW_NAME B from OPB_TASK T, OPB_TASK_ATTR A,rep_workflows B  where T.TASK_ID=A.TASK_ID AND
+        A.ATTR_ID=107 AND ATTR_VALUE=1 AND T.SUBJECT_ID=B.SUBJECT_ID;
+        Select T.*,SUBJECT_AREA B,WORKFLOW_NAME B from OPB_TASK T, OPB_TASK_ATTR A,rep_workflows B  where T.TASK_ID=A.TASK_ID AND
+        A.ATTR_ID=107 AND ATTR_VALUE=2 AND T.SUBJECT_ID=B.SUBJECT_ID;
+        Select T.*,SUBJECT_AREA B,WORKFLOW_NAME B from OPB_TASK T, OPB_TASK_ATTR A,rep_workflows B  where T.TASK_ID=A.TASK_ID AND
+        A.ATTR_ID=107 AND ATTR_VALUE=3 AND T.SUBJECT_ID=B.SUBJECT_ID;
+
+        --8.28 Persistent Cache
+        SELECT DISTINCT c.PARENT_SUBJECT_AREA, c.widget_name, d.attr_name
+          FROM OPB_WIDGET_ATTR b, rep_all_transforms C, OPB_ATTR d
+         WHERE     d.attr_id = b.attr_id
+               AND d.attr_type = 5
+               AND b.attr_id = 12
+               AND b.widget_type = 11
+               AND c.widget_id = b.widget_id
+               AND b.attr_value = 1                  -- 1 is enabled and 0 id disabled
+
+        --9          TASKS
+        --9.1          List command tasks
+         SELECT   SUBJECT_AREA, TASK_TYPE_NAME, TASK_NAME
+            FROM REP_ALL_TASKS
+           WHERE TASK_TYPE IN (58) 
+                 --AND SUBJECT_AREA= 'ABC'
+        ORDER BY 1, 2, 3;
+
+
+        --9.2          List decision
+        tasks
+         SELECT   SUBJECT_AREA, TASK_TYPE_NAME, TASK_NAME
+            FROM REP_ALL_TASKS
+           WHERE TASK_TYPE IN (59) 
+                 --AND SUBJECT_AREA= 'ABC'
+        ORDER BY 1, 2, 3
+
+        --9.3          List Event Wait tasks
+        SELECT   SUBJECT_AREA, TASK_TYPE_NAME, TASK_NAME
+            FROM REP_ALL_TASKS
+           WHERE TASK_TYPE IN (60) 
+                 --AND SUBJECT_AREA= 'ABC'
+        ORDER BY 1, 2, 3;
+
+        --9.4          List Event Wait tasks
+        SELECT   SUBJECT_AREA, TASK_TYPE_NAME, TASK_NAME
+        FROM REP_ALL_TASKS
+          WHERE TASK_TYPE IN (60) 
+                --AND SUBJECT_AREA= 'ABC'
+        ORDER BY 1, 2, 3;
+
+        --10          WORKLET
+        --10.1          List worklet names
+         SELECT   SUBJECT_AREA, TASK_TYPE_NAME, TASK_NAME
+            FROM REP_ALL_TASKS
+           WHERE TASK_TYPE IN (70) 
+                 --AND SUBJECT_AREA= 'ABC'
+        ORDER BY 1, 2, 3;
+
+        --10.2          List hierarchies of all workflows and its worklets
+         SELECT DISTINCT '/' || temp1.task_id AS path, temp1.task_name AS hierarchy_structure
+        FROM opb_task temp1, opb_subject temp2
+        WHERE temp1.subject_id = temp2.subj_id
+        AND temp1.task_type = 71
+        AND temp2.subj_name = 'FOLDER_NAME'
+        UNION ALL
+        SELECT DISTINCT temp1.path, temp1.task_name AS hierarchy_structure
+        FROM (SELECT opb_task_inst.workflow_id,opb_task_inst.task_id,opb_task_inst.instance_id,LEVEL
+        depth,
+        SYS_CONNECT_BY_PATH(opb_task_inst.workflow_id
+        ,'/') || '/' || opb_task_inst.task_id || '/'
+        path,
+        LPAD (' ', 4 * LEVEL, ' ') || SYS_CONNECT_BY_PATH(opb_task_inst.instance_name
+        ,'/')
+        task_name
+        FROM opb_task_inst WHERE opb_task_inst.task_type
+        IN (68,70)
+        START WITH workflow_id IN (SELECT
+        task_id FROM opb_task WHERE task_type = 71)
+        CONNECT BY PRIOR opb_task_inst.task_id
+        = opb_task_inst.workflow_id)
+        temp1,
+        opb_task temp2, opb_subject temp3
+        WHERE temp2.subject_id = temp3.subj_id
+        AND temp2.task_id = SUBSTR(temp1.path,2, INSTR(temp1.path,'/', 1, 2) -2 )
+        AND temp3.subj_name = 'FOLDER_NAME'
+        ORDER BY path ASC
+
+		
+If you query the REP_WORKFLOWS view, you can retrieve the workflows that use a scheduler. Following is the query: 
+select workflow_name, scheduler_name from rep_workflows where scheduler_name is not null; 
+
+Following is the Workflows query for reusable schedulers: 
+select workflow_name, scheduler_name from rep_workflows where scheduler_is_reusable = '1'; 
+
+Following is the Workflow query for a particular name: 
+select workflow_name, scheduler_name from rep_workflows where scheduler_name = '<scheduler name> 
+
+
+--schduled to run on integration service initialization
+
+select
+subject_area "Folder",
+workflow_name "Workflow Name",
+scheduler_name "Scheduler Name",
+start_time "Start Time",
+end_time "End Time",
+run_options "Run Option Code",
+decode(run_options,
+   1, 'Run on demand',
+   2, 'Run once',
+   4, 'Run every ' || delta_value || ' seconds',
+   8, 'Customized repeat',
+  16, 'Run on service initialization',
+  18, 'Run on service initialization and run once',
+  20, 'Run on service initialization and every ' || delta_value || ' seconds',
+  24, 'Run on service initialization and customized repeat',
+  32, 'Run continuously',
+      'Unknown') "Run Options",
+end_options "End Option Code",
+decode(end_options,
+   0, 'End on a date',
+   1, 'End after ' || run_count || ' runs',
+   2, 'Run forever',
+      'Unknown') "End Options",
+workflow_last_saved "Workflow Last Saved"
+from
+rep_workflows
+where
+scheduler_name <> 'Scheduler'
+order by
+1,2
+
+
+--workflows that use the Event-Raise task and location of user-defined event 
+SELECT DISTINCT b.task_name as WorkflowName,c.task_name as TaskName, a.attr_value
+FROM rep_task_attr a, rep_all_tasks b, rep_all_tasks c
+WHERE a.task_id = c.task_id AND
+b.task_id = c.task_id AND
+a.task_type = 61
+AND a.task_id in (SELECT task_id FROM rep_task_attr
+WHERE attr_name='User Defined Event') 
