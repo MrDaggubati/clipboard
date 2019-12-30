@@ -1,0 +1,19 @@
+# Visual Studio Code isntallation on Ubuntu ; not a vs code server but a standalone installation
+# ideal to install a code server in a dedicated docker container that runs on a machine that do not get shutdown.
+
+
+#update the packages index and install the dependencies
+sudo apt update
+sudo apt install software-properties-common apt-transport-https wget
+
+# import MS PGP key
+wget -q https://packages.microsoft.com/keys/microsoft.asc -O- | sudo apt-key add -
+
+# add microsfot vscode repo to linux repos
+sudo add-apt-repository "deb [arch=amd64] https://packages.microsoft.com/repos/vscode stable main"
+
+# install latest vscode version
+sudo apt update
+sudo apt install code
+
+# you can launch by entering code.
