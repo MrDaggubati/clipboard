@@ -1,4 +1,0 @@
-# list installed repos; debian linux flavors 
-sudo grep -Erh ^deb /etc/apt/sources.list*
-
-# sudo yum repolist all for rhel
